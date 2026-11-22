@@ -43,6 +43,7 @@
         <span>BPM</span>
         <input id="inp-bpm" type="number" min="20" max="400" step="0.1" value="120">
       </label>
+      <button id="btn-tempo-lane" class="tbtn toggle" title="Show the tempo lane — add points to speed up or slow down the whole song">Tempo ⤴</button>
       <button id="btn-meter" class="meter-btn" title="Time signature at the playhead's bar">4/4</button>
       <label class="field">
         <span>Snap</span>
@@ -59,6 +60,7 @@
       <button id="btn-zoom-in" class="tbtn small" title="Zoom in (Ctrl + scroll)">+</button>
       <button id="btn-tab-pianoroll" class="tbtn toggle" title="Piano roll / beat editor (double-click a clip)">Editor</button>
       <button id="btn-tab-instrument" class="tbtn toggle" title="Instrument settings for the selected track">Instrument</button>
+      <button id="btn-tab-effects" class="tbtn toggle" title="Effects for the selected track or the master">Effects</button>
       <button id="btn-tab-mixer" class="tbtn toggle" title="Mixer">Mixer</button>
       <button id="btn-tab-keyboard" class="tbtn toggle" title="On-screen keyboard">Keyboard</button>
     </div>
@@ -85,6 +87,7 @@
     <div id="dock-tabs" class="dock-tabs"></div>
     <div class="dock-pane" data-pane="pianoroll"><div id="pr-root" class="editor-root"></div><div id="beat-root" class="editor-root" hidden></div></div>
     <div class="dock-pane" data-pane="instrument" id="inst-root"></div>
+    <div class="dock-pane" data-pane="effects" id="fx-root"></div>
     <div class="dock-pane" data-pane="mixer"><div id="mixer-strips"></div></div>
     <div class="dock-pane" data-pane="keyboard" id="kb-root"></div>
   </section>

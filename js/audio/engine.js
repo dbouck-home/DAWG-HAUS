@@ -5,28 +5,75 @@ import { Synth } from './synth.js';
 import { effectivePreset } from './presets.js';
 import { Sampler } from './sampler.js';
 import { DrumKit } from './drums.js';
+import { createFx, updateFx } from './effects.js';
+import { valueAt, activeLane } from '../automation.js';
 
 const LOOKAHEAD = 0.12; // seconds scheduled ahead
 const INTERVAL = 25; // ms between scheduler runs
 
 export const dbToGain = (db) => (db <= -60 ? 0 : Math.pow(10, db / 20));
 
+/** An insert-effects chain between two nodes. Rebuilds connections only when the chain changes. */
+class FxChain {
+  constructor(ctx, from, to) {
+    this.ctx = ctx;
+    this.from = from;
+    this.to = to;
+    this.insts = new Map();
+    this.key = null;
+    from.connect(to);
+  }
+
+  sync(list = []) {
+    const key = JSON.stringify(list.map((f) => [f.id, f.type, f.on !== false]));
+    if (key !== this.key) {
+      this.key = key;
+      const ids = new Set(list.map((f) => f.id));
+      for (const [id, inst] of this.insts) {
+        if (!ids.has(id)) { try { inst.output.disconnect(); inst.dispose?.(); } catch { /* ignore */ } this.insts.delete(id); }
+      }
+      this.from.disconnect();
+      for (const inst of this.insts.values()) { try { inst.output.disconnect(); } catch { /* ignore */ } }
+      let node = this.from;
+      for (const f of list) {
+        let inst = this.insts.get(f.id);
+        if (!inst) { inst = createFx(this.ctx, f); this.insts.set(f.id, inst); }
+        if (f.on === false) continue;
+        node.connect(inst.input);
+        node = inst.output;
+      }
+      node.connect(this.to);
+    }
+    for (const f of list) { const inst = this.insts.get(f.id); if (inst) updateFx(inst, f); }
+  }
+
+  tempo(bpm, at) {
+    for (const inst of this.insts.values()) {
+      if (inst.tempo && inst.lastBpm !== bpm) { inst.lastBpm = bpm; inst.tempo(bpm, at); }
+    }
+  }
+
+  dispose() { for (const inst of this.insts.values()) { try { inst.dispose?.(); } catch { /* ignore */ } } }
+}
+
 class Channel {
   constructor(ctx, dest) {
     this.ctx = ctx;
     this.input = ctx.createGain();
-    // Phase 4: insert effects chain goes between input and fader
-    this.fader = ctx.createGain();
+    this.fader = ctx.createGain(); // volume (automatable)
+    this.muteGain = ctx.createGain(); // mute / solo
     this.panner = ctx.createStereoPanner();
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 512;
-    this.input.connect(this.fader).connect(this.panner).connect(this.analyser).connect(dest);
+    this.fx = new FxChain(ctx, this.input, this.fader);
+    this.fader.connect(this.muteGain).connect(this.panner).connect(this.analyser).connect(dest);
     this.instrument = null;
     this.presetId = null;
     this.meterBuf = new Float32Array(this.analyser.fftSize);
   }
 
   setGain(g) { this.fader.gain.setTargetAtTime(g, this.ctx.currentTime, 0.015); }
+  setMute(m) { this.muteGain.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.01); }
   setPan(p) { this.panner.pan.setTargetAtTime(p, this.ctx.currentTime, 0.015); }
 
   peak() {
@@ -38,6 +85,7 @@ class Channel {
 
   dispose() {
     this.instrument?.dispose();
+    this.fx.dispose();
     try { this.analyser.disconnect(); } catch { /* ignore */ }
   }
 }
@@ -76,7 +124,8 @@ export class Engine {
       this.masterAnalyser = this.ctx.createAnalyser();
       this.masterAnalyser.fftSize = 512;
       this.masterBuf = new Float32Array(512);
-      this.master.connect(this.limiter).connect(this.masterAnalyser).connect(this.ctx.destination);
+      this.masterFx = new FxChain(this.ctx, this.master, this.limiter);
+      this.limiter.connect(this.masterAnalyser).connect(this.ctx.destination);
       this.clickGain = this.ctx.createGain();
       this.clickGain.connect(this.ctx.destination);
       this.sync();
@@ -130,10 +179,29 @@ export class Engine {
           if (key !== ch.paramKey) { ch.instrument.setPreset(pr); ch.paramKey = key; }
         }
       }
-      const audible = !t.mute && (!anySolo || t.solo);
-      ch.setGain(audible ? dbToGain(t.volume) : 0);
-      ch.setPan(t.pan || 0);
+      ch.setMute(!(!t.mute && (!anySolo || t.solo)));
+      ch.fx.sync(t.fx || []);
+      // automated settings follow their lane; while playing the scheduler drives them
+      if (!this.playing) {
+        const pos = this.positionTick;
+        const vol = activeLane(t, 'volume');
+        const pan = activeLane(t, 'pan');
+        ch.setGain(dbToGain(vol ? valueAt(vol.points, pos) : t.volume));
+        ch.setPan(pan ? valueAt(pan.points, pos) : (t.pan || 0));
+        for (const lane of t.automation || []) {
+          if (!lane.points.length || !lane.target.startsWith('fx:')) continue;
+          for (const pr of this.resolve(t, lane.target)) pr.param.setTargetAtTime(pr.map(valueAt(lane.points, pos)), this.ctx.currentTime, 0.01);
+        }
+      } else {
+        if (!activeLane(t, 'volume')) ch.setGain(dbToGain(t.volume));
+        if (!activeLane(t, 'pan')) ch.setPan(t.pan || 0);
+      }
     }
+    this.masterFx.sync(p.masterFx || []);
+    const tempo = new TempoMap(p.tempos);
+    const bpm = tempo.bpmAt(this.playing ? this.currentTick() : this.positionTick);
+    for (const ch of this.channels.values()) ch.fx.tempo(bpm, this.ctx.currentTime);
+    this.masterFx.tempo(bpm, this.ctx.currentTime);
     this.master.gain.setTargetAtTime(dbToGain(p.masterVolume), this.ctx.currentTime, 0.015);
     this.clickGain.gain.value = p.metronome.volume;
   }
@@ -165,6 +233,7 @@ export class Engine {
     this.anchors = [{ tick: fromTick, time: startTime }];
     this.cursorTick = fromTick;
     this.playing = true;
+    this.autoFresh = true;
     this.tickScheduler();
     this.timer = setInterval(() => this.tickScheduler(), INTERVAL);
     this.emit('transport');
@@ -178,7 +247,39 @@ export class Engine {
     clearInterval(this.timer);
     for (const ch of this.channels.values()) ch.instrument?.allNotesOff();
     this.positionTick = Math.max(0, Math.round(t));
+    this.releaseAutomation();
     this.emit('transport');
+  }
+
+  /** Cancel scheduled automation and go back to the static (or stopped-position) values. */
+  releaseAutomation() {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    for (const t of this.getProject().tracks) {
+      for (const lane of t.automation || []) {
+        for (const pr of this.resolve(t, lane.target)) {
+          pr.param.cancelScheduledValues(now);
+          pr.param.setValueAtTime(pr.param.value, now);
+        }
+      }
+    }
+    this.sync();
+  }
+
+  /** The AudioParams a lane drives: [{ param, map(value) }]. */
+  resolve(track, target) {
+    const ch = this.channels.get(track.id);
+    if (!ch) return [];
+    if (target === 'volume') return [{ param: ch.fader.gain, map: dbToGain }];
+    if (target === 'pan') return [{ param: ch.panner.pan, map: (v) => v }];
+    if (target.startsWith('fx:')) {
+      const [, id, key] = target.split(':');
+      const inst = ch.fx.insts.get(id);
+      const a = inst?.automatable(key);
+      if (!a) return [];
+      return a.also ? [a, a.also] : [a];
+    }
+    return [];
   }
 
   setPosition(tick) {
@@ -188,8 +289,10 @@ export class Engine {
       this.playing = false;
       clearInterval(this.timer);
       for (const ch of this.channels.values()) ch.instrument?.allNotesOff();
+      this.releaseAutomation();
     }
     this.positionTick = Math.max(0, Math.round(tick));
+    if (!wasPlaying) this.sync();
     if (wasPlaying) {
       const rec = this.recording;
       this.play(this.positionTick);
@@ -217,6 +320,7 @@ export class Engine {
         const wrapTime = this.timeOfTick(loop.end, anchor, tempo);
         this.anchors.push({ tick: loop.start, time: wrapTime });
         this.cursorTick = loop.start;
+        this.autoFresh = true;
         continue;
       }
       this.scheduleRange(this.cursorTick, targetTick, anchor, meter, tempo, p, looping ? loop.end : Infinity);
@@ -255,6 +359,35 @@ export class Engine {
     }
     if (p.metronome.enabled) {
       for (const b of meter.beatsBetween(from, to)) this.click(time(b.tick), b.accent);
+    }
+    this.scheduleAutomation(from, to, time, tempo, p);
+  }
+
+  scheduleAutomation(from, to, time, tempo, p) {
+    const fresh = this.autoFresh;
+    this.autoFresh = false;
+    const tFrom = Math.max(time(from), this.ctx.currentTime);
+    for (const t of p.tracks) {
+      for (const lane of t.automation || []) {
+        if (!lane.points.length) continue;
+        const prs = this.resolve(t, lane.target);
+        if (!prs.length) continue;
+        const pts = lane.points;
+        for (const { param, map } of prs) {
+          if (fresh) {
+            param.cancelScheduledValues(tFrom);
+            param.setValueAtTime(map(valueAt(pts, from)), tFrom);
+          }
+          for (const pt of pts) if (pt.t > from && pt.t <= to) param.linearRampToValueAtTime(map(pt.v), time(pt.t));
+          param.linearRampToValueAtTime(map(valueAt(pts, to)), time(to));
+        }
+      }
+    }
+    // tempo-synced effects (delays, wobbles) follow tempo changes
+    if (p.tempos.length > 1 || fresh) {
+      const bpm = tempo.bpmAt(from);
+      for (const ch of this.channels.values()) ch.fx.tempo(bpm, tFrom);
+      this.masterFx.tempo(bpm, tFrom);
     }
   }
 

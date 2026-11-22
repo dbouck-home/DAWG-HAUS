@@ -40,6 +40,9 @@ export function newTrack(type = 'instrument', preset = 'soft-keys') {
     mute: false,
     solo: false,
     clips: [],
+    fx: [],
+    automation: [],
+    showAuto: false,
   };
   if (type === 'instrument') t.instrument = { preset, params: {} };
   if (type === 'drums') t.drums = { kit: preset || '808', pads: {} };
@@ -65,6 +68,7 @@ export function newProject(name = 'Untitled Song') {
     masterVolume: 0,
     lengthBars: 64,
     tracks: [],
+    masterFx: [],
   };
   return p;
 }

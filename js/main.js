@@ -7,6 +7,7 @@ import { growl } from './audio/growl.js';
 import { PianoRoll } from './ui/pianoroll.js';
 import { Dock, InstrumentPanel, OnscreenKeyboard } from './ui/dock.js';
 import { BeatEditor } from './ui/drumeditor.js';
+import { FxPanel } from './ui/fxpanel.js';
 import { KITS, getKit } from './audio/drums.js';
 import { demoProject, newProject, newTrack, newClip, migrateProject } from './project.js';
 import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject } from './storage.js';
@@ -29,7 +30,7 @@ async function boot() {
   const engine = new Engine(() => store.project);
   Object.assign(store.ui, { dockOpen: false, dockTab: 'pianoroll', dockHeight: 340 });
   const timeline = new Timeline({ store, engine, onEditMeter: (bar) => meterDialog(bar), onOpenClip: (id) => openClip(id) });
-  const headers = new TrackHeaders({ store, engine });
+  const headers = new TrackHeaders({ store, engine, onShowFx: (id) => { store.setUI({ selectedTrackId: id }); fxPanel.target = 'track'; dock.show('effects'); } });
   const mixer = new Mixer({ store, engine });
   const pianoRoll = new PianoRoll({ store, engine, root: $('pr-root') });
   const beatEditor = new BeatEditor({ store, engine, root: $('beat-root') });
@@ -41,6 +42,8 @@ async function boot() {
     $('beat-root').hidden = mode !== 'beat';
   }
   const instPanel = new InstrumentPanel({ store, engine, root: $('inst-root') });
+  const fxPanel = new FxPanel({ store, root: $('fx-root'), onAutomate: (trackId, target) => { headers.showAutomation(trackId, target); } });
+  Object.assign(store.ui, { showTempo: false });
   const liveTrackId = () => { const t = store.selectedTrack(); return t && t.type !== 'audio' ? t.id : null; };
   const onscreenKb = new OnscreenKeyboard({ store, engine, root: $('kb-root'), liveTrack: liveTrackId });
   const dock = new Dock({ store, onChange: () => { renderDock(); renderTransportFields(); timeline.layout(); } });
@@ -49,6 +52,7 @@ async function boot() {
     if (!dock.open) return;
     if (dock.tab === 'pianoroll') editor().refresh();
     if (dock.tab === 'instrument') instPanel.render();
+    if (dock.tab === 'effects') fxPanel.render();
     if (dock.tab === 'mixer') mixer.render();
     if (dock.tab === 'keyboard') onscreenKb.render();
   }
@@ -89,7 +93,10 @@ async function boot() {
     $('inp-click-vol').value = p.metronome.volume;
     $('btn-play').classList.toggle('active', engine.playing);
     $('btn-record').classList.toggle('active', engine.recording);
-    for (const tab of ['pianoroll', 'instrument', 'mixer', 'keyboard']) $(`btn-tab-${tab}`).classList.toggle('active', dock.open && dock.tab === tab);
+    for (const tab of ['pianoroll', 'instrument', 'effects', 'mixer', 'keyboard']) $(`btn-tab-${tab}`).classList.toggle('active', dock.open && dock.tab === tab);
+    $('btn-tempo-lane').classList.toggle('active', !!store.ui.showTempo);
+    bpmInput.readOnly = p.tempos.length > 1;
+    bpmInput.title = p.tempos.length > 1 ? 'The tempo changes during this song — edit it in the Tempo lane' : 'Tempo in beats (quarter notes) per minute';
     $('sel-snap').value = String(store.ui.snap);
     lastMeterLabel = null;
   }
@@ -111,7 +118,7 @@ async function boot() {
     else if (kind === 'silent') { engine.sync(); }
     else if (kind === 'ui' || kind === 'selection') {
       headers.updateSelection(); mixer.updateSelection(); timeline.updateSelection();
-      if (dock.open && (dock.tab === 'instrument' || dock.tab === 'keyboard')) renderDock();
+      if (dock.open && (dock.tab === 'instrument' || dock.tab === 'keyboard' || dock.tab === 'effects')) renderDock();
       renderTransportFields(); renderStatus(); timeline.drawStatic();
     } else if (kind === 'save') renderSave();
     if (kind === 'project' || kind === 'silent' || kind === 'load') {
@@ -144,7 +151,8 @@ async function boot() {
   $('inp-click-vol').oninput = (e) => store.mutate((p) => { p.metronome.volume = +e.target.value; }, { merge: 'clickvol', silent: true });
   $('btn-zoom-in').onclick = () => timeline.zoom(1.3);
   $('btn-zoom-out').onclick = () => timeline.zoom(1 / 1.3);
-  for (const tab of ['pianoroll', 'instrument', 'mixer', 'keyboard']) {
+  $('btn-tempo-lane').onclick = () => { store.ui.showTempo = !store.ui.showTempo; renderAll(); };
+  for (const tab of ['pianoroll', 'instrument', 'effects', 'mixer', 'keyboard']) {
     $(`btn-tab-${tab}`).onclick = () => {
       if (tab === 'pianoroll' && !editor().clipId && store.ui.selectedClipId) { openClip(store.ui.selectedClipId); return; }
       dock.toggle(tab);
@@ -164,6 +172,7 @@ async function boot() {
     let v = parseFloat(e.target.value);
     if (!Number.isFinite(v)) v = store.project.tempos[0].bpm;
     v = Math.min(400, Math.max(20, v));
+    if (store.project.tempos.length > 1) return;
     store.mutate((p) => { p.tempos[0].bpm = v; });
     e.target.blur();
   });
@@ -464,6 +473,8 @@ async function boot() {
     const sub = Math.floor((bbt.tickInBeat / bbt.meter.beatTicks) * 1000);
     $('pos-bbt').textContent = `${bbt.bar + 1}.${bbt.beat + 1}.${String(sub).padStart(3, '0')}`;
     $('pos-time').textContent = `${formatTime(tempo.tickToSec(tick))} · ${bbt.meter.num}/${bbt.meter.den}`;
+    if (p.tempos.length > 1 && document.activeElement !== $('inp-bpm')) $('inp-bpm').value = tempo.bpmAt(tick).toFixed(1);
+    if (engine.playing && (store.ui.showTempo || p.tracks.some((t) => t.showAuto))) timeline.drawLanes();
     const label = `${bbt.meter.num}/${bbt.meter.den}`;
     if (label !== lastMeterLabel) { $('btn-meter').textContent = label; lastMeterLabel = label; }
     timeline.updatePlayhead();

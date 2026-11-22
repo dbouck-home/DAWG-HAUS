@@ -2,6 +2,8 @@
 import { PRESETS, colorForTrack, CATEGORY_COLORS } from '../audio/presets.js';
 import { h, confirmBox } from './dom.js';
 import { KITS } from '../audio/drums.js';
+import { targetsFor, activeLane } from '../automation.js';
+import { uid } from '../project.js';
 
 export const fmtDb = (db) => (db <= -60 ? '-∞ dB' : `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`);
 const fmtPan = (p) => (Math.abs(p) < 0.01 ? 'C' : p < 0 ? `L${Math.round(-p * 100)}` : `R${Math.round(p * 100)}`);
@@ -20,17 +22,69 @@ function instrumentSelect(track, onChange) {
 }
 
 export class TrackHeaders {
-  constructor({ store, engine }) {
+  constructor({ store, engine, onShowFx }) {
     this.store = store;
     this.engine = engine;
+    this.onShowFx = onShowFx;
     this.el = document.getElementById('track-headers');
     this.meters = new Map();
+  }
+
+  /** Show automation lanes for a track (adding a lane for `target` if given). */
+  showAutomation(trackId, target) {
+    this.store.mutate((p) => {
+      const t = p.tracks.find((x) => x.id === trackId);
+      if (!t) return;
+      t.automation ||= [];
+      if (target && !t.automation.some((a) => a.target === target)) t.automation.push({ id: uid('au'), target, points: [] });
+      if (!t.automation.length) t.automation.push({ id: uid('au'), target: 'volume', points: [] });
+      t.showAuto = true;
+    });
+  }
+
+  autoHeader(t, lane) {
+    const targets = targetsFor(t);
+    const used = new Set((t.automation || []).map((a) => a.target));
+    const sel = h('select', {
+      title: 'What this lane controls',
+      onchange: (e) => this.store.mutate((p) => {
+        const a = p.tracks.find((x) => x.id === t.id).automation.find((x) => x.id === lane.id);
+        a.target = e.target.value;
+        a.points = [];
+      }),
+    }, targets.map((tg) => h('option', { value: tg.key, selected: tg.key === lane.target, disabled: tg.key !== lane.target && used.has(tg.key) }, tg.label)));
+    const unused = targets.find((tg) => !used.has(tg.key));
+    return h('div', { class: 'ah', 'data-track': t.id },
+      h('div', { class: 'row' }, sel,
+        h('button', {
+          class: 'sb', title: 'Clear all points in this lane',
+          onclick: () => this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).automation.find((x) => x.id === lane.id).points = []; }),
+        }, '⌫'),
+        h('button', {
+          class: 'sb del', title: 'Remove this lane (and its automation)',
+          onclick: () => this.store.mutate((p) => {
+            const x = p.tracks.find((y) => y.id === t.id);
+            x.automation = x.automation.filter((a) => a.id !== lane.id);
+            if (!x.automation.length) x.showAuto = false;
+          }),
+        }, '✕')),
+      h('div', { class: 'row' },
+        h('span', { class: 'alabel' }, lane.points.length ? `${lane.points.length} point${lane.points.length === 1 ? '' : 's'}` : 'click the lane to add points'),
+        h('div', { class: 'spacer' }),
+        unused ? h('button', { class: 'pbtn', title: 'Add another automation lane', onclick: () => this.showAutomation(t.id, unused.key) }, '+ Lane') : null));
   }
 
   render() {
     const { project, ui } = this.store;
     this.el.innerHTML = '';
     this.meters.clear();
+    if (ui.showTempo) {
+      const n = project.tempos.length;
+      this.el.append(h('div', { class: 'ah tempo' },
+        h('div', { class: 'row' }, h('b', {}, '⏱ Tempo'), h('div', { class: 'spacer' }),
+          h('button', { class: 'sb', title: 'Remove tempo changes (keep the starting tempo)', onclick: () => this.store.mutate((p) => { p.tempos = [{ tick: 0, bpm: p.tempos[0].bpm }]; }) }, '⌫')),
+        h('span', { class: 'alabel' }, n > 1 ? `${n} tempo points — the song speeds up / slows down` : 'click the lane to add tempo changes')));
+    }
     project.tracks.forEach((t) => {
       const selected = t.id === ui.selectedTrackId;
       const nameEl = h('div', {
@@ -62,11 +116,20 @@ export class TrackHeaders {
           t.type !== 'audio' ? h('span', { class: 'live-ind', title: 'Your MIDI keyboard and computer keyboard play this track' }, '🎹') : null,
           h('button', { class: `sb m ${t.mute ? 'active' : ''}`, title: 'Mute', onclick: () => this.toggle(t, 'mute') }, 'M'),
           h('button', { class: `sb s ${t.solo ? 'active' : ''}`, title: 'Solo', onclick: () => this.toggle(t, 'solo') }, 'S'),
+          h('button', {
+            class: `sb fxb ${(t.fx || []).length ? 'active' : ''}`, title: `Effects${(t.fx || []).length ? ` (${t.fx.length})` : ''}`,
+            onclick: () => this.onShowFx?.(t.id),
+          }, 'FX'),
+          h('button', {
+            class: `sb a ${t.showAuto ? 'active' : ''}`, title: 'Show / hide automation lanes',
+            onclick: () => { if (t.showAuto) this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).showAuto = false; }); else this.showAutomation(t.id); },
+          }, 'A'),
           h('button', { class: 'sb del', title: 'Delete track', onclick: () => this.remove(t) }, '✕')),
         h('div', { class: 'row' }, row2),
         h('div', { class: 'row' },
           h('input', {
-            type: 'range', min: -60, max: 6, step: 0.1, value: t.volume, title: 'Volume (double-click to reset)',
+            type: 'range', min: -60, max: 6, step: 0.1, value: t.volume,
+            title: activeLane(t, 'volume') ? 'Volume is automated — edit its lane (this level is used when there are no points)' : 'Volume (double-click to reset)',
             oninput: (e) => { const v = +e.target.value; volLabel.textContent = fmtDb(v); this.setVol(t, v); },
             onchange: () => this.store.emit('project'),
             ondblclick: () => { this.setVol(t, 0); this.store.emit('project'); },
@@ -74,6 +137,7 @@ export class TrackHeaders {
           volLabel)),
       h('div', { class: 'hmeter' }, meter));
       this.el.append(el);
+      if (t.showAuto) for (const lane of t.automation || []) this.el.append(this.autoHeader(t, lane));
     });
   }
 

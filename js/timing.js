@@ -185,40 +185,66 @@ export class MeterMap {
 }
 
 /**
- * TempoMap converts between ticks and seconds. Tempo changes are steps.
- * tempos: [{tick, bpm}] (bpm = quarter notes per minute)
+ * TempoMap converts between ticks and seconds.
+ * tempos: [{tick, bpm}] (bpm = quarter notes per minute). Between two points the tempo
+ * changes smoothly (linear ramp); before the first / after the last point it stays constant.
  */
 export class TempoMap {
   constructor(tempos) {
-    const list = [...(tempos || [])].sort((a, b) => a.tick - b.tick);
-    if (!list.length || list[0].tick !== 0) list.unshift({ tick: 0, bpm: 120 });
+    const list = [...(tempos || [])].filter((p) => p && Number.isFinite(p.tick) && p.bpm > 0).sort((a, b) => a.tick - b.tick);
+    if (!list.length) list.push({ tick: 0, bpm: 120 });
+    if (list[0].tick !== 0) list.unshift({ tick: 0, bpm: list[0].bpm });
     this.points = [];
     let sec = 0;
     for (let i = 0; i < list.length; i++) {
       if (i > 0) {
         const p = this.points[i - 1];
-        sec = p.sec + ((list[i].tick - p.tick) / PPQ) * (60 / p.bpm);
+        sec = p.sec + this.segSeconds(p.bpm, list[i].bpm, list[i].tick - p.tick, list[i].tick - p.tick);
       }
       this.points.push({ tick: list[i].tick, bpm: list[i].bpm, sec });
     }
   }
 
+  /** Seconds to advance dt ticks into a segment that ramps b0 -> b1 over len ticks. */
+  segSeconds(b0, b1, len, dt) {
+    if (dt <= 0) return 0;
+    if (!len || Math.abs(b1 - b0) < 1e-9) return (dt / PPQ) * (60 / b0);
+    const k = (b1 - b0) / len; // bpm per tick
+    return (60 / (PPQ * k)) * Math.log((b0 + k * dt) / b0);
+  }
+
+  seg(tick) {
+    let i = 0;
+    while (i + 1 < this.points.length && this.points[i + 1].tick <= tick) i++;
+    return i;
+  }
+
   bpmAt(tick) {
-    let p = this.points[0];
-    for (const q of this.points) { if (q.tick <= tick) p = q; else break; }
-    return p.bpm;
+    const i = this.seg(tick);
+    const a = this.points[i];
+    const b = this.points[i + 1];
+    if (!b) return a.bpm;
+    return a.bpm + ((b.bpm - a.bpm) * (tick - a.tick)) / (b.tick - a.tick);
   }
 
   tickToSec(tick) {
-    let p = this.points[0];
-    for (const q of this.points) { if (q.tick <= tick) p = q; else break; }
-    return p.sec + ((tick - p.tick) / PPQ) * (60 / p.bpm);
+    const i = this.seg(tick);
+    const a = this.points[i];
+    const b = this.points[i + 1];
+    if (tick < a.tick) return a.sec + ((tick - a.tick) / PPQ) * (60 / a.bpm);
+    if (!b) return a.sec + ((tick - a.tick) / PPQ) * (60 / a.bpm);
+    return a.sec + this.segSeconds(a.bpm, b.bpm, b.tick - a.tick, tick - a.tick);
   }
 
   secToTick(sec) {
-    let p = this.points[0];
-    for (const q of this.points) { if (q.sec <= sec) p = q; else break; }
-    return p.tick + (sec - p.sec) * (p.bpm / 60) * PPQ;
+    let i = 0;
+    while (i + 1 < this.points.length && this.points[i + 1].sec <= sec) i++;
+    const a = this.points[i];
+    const b = this.points[i + 1];
+    const ds = sec - a.sec;
+    if (!b || Math.abs(b.bpm - a.bpm) < 1e-9 || ds < 0) return a.tick + ds * (a.bpm / 60) * PPQ;
+    const k = (b.bpm - a.bpm) / (b.tick - a.tick);
+    return a.tick + (a.bpm * (Math.exp((ds * PPQ * k) / 60) - 1)) / k;
   }
 }
 

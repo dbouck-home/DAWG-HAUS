@@ -8,6 +8,7 @@ import { h } from './dom.js';
 export const DOCK_TABS = [
   { id: 'pianoroll', label: 'Editor' },
   { id: 'instrument', label: 'Instrument' },
+  { id: 'effects', label: 'Effects' },
   { id: 'mixer', label: 'Mixer' },
   { id: 'keyboard', label: 'Keyboard' },
 ];

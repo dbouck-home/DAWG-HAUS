@@ -3,6 +3,7 @@ import { PPQ, MeterMap } from '../timing.js';
 import { colorForTrack } from '../audio/presets.js';
 import { newClip } from '../project.js';
 import { h } from './dom.js';
+import { AUTO_H, laneData, drawLane, bindLaneRow } from './autolanes.js';
 
 const LOOP_STRIP = 15;
 
@@ -78,12 +79,20 @@ export class Timeline {
     const { project, ui } = this.store;
     this.rows.innerHTML = '';
     this.emptyHint.hidden = project.tracks.length > 0;
+    const autoRow = (trackId, laneId) => {
+      const row = h('div', { class: 'alane', 'data-track': trackId, 'data-lane': laneId }, h('canvas', { class: 'acanvas' }));
+      bindLaneRow(row, { store: this.store, timeline: this });
+      return row;
+    };
+    if (ui.showTempo) this.rows.append(autoRow('', 'tempo'));
     for (const t of project.tracks) {
       const lane = h('div', { class: `lane ${t.id === ui.selectedTrackId ? 'selected' : ''}`, 'data-track': t.id });
       const color = colorForTrack(t);
       for (const c of t.clips) lane.append(this.renderClip(t, c, color));
       this.rows.append(lane);
+      if (t.showAuto) for (const a of t.automation || []) this.rows.append(autoRow(t.id, a.id));
     }
+    this.layout();
     this.drawStatic();
   }
 
@@ -128,8 +137,10 @@ export class Timeline {
     const width = Math.ceil(this.tickToX(end)) + 300;
     this.contentWidth = width;
     this.inner.style.gridTemplateColumns = `${this.headerW}px ${width}px`;
-    const tracks = this.store.project.tracks.length;
-    const lanesH = Math.max(tracks * this.laneH, this.arrange.clientHeight - 44);
+    const { project, ui } = this.store;
+    let contentH = project.tracks.length * this.laneH + (ui.showTempo ? AUTO_H : 0);
+    for (const t of project.tracks) if (t.showAuto) contentH += (t.automation || []).length * AUTO_H;
+    const lanesH = Math.max(contentH, this.arrange.clientHeight - 44);
     this.lanes.style.height = `${lanesH}px`;
     // update clip positions (cheap) without rebuilding
     this.drawStatic();
@@ -242,7 +253,24 @@ export class Timeline {
         this.meterMarkers.push({ bar, x: bx + x0, w: tw });
       }
     }
+    this.drawLanes();
     this.updatePlayhead();
+  }
+
+  /** Draw every visible automation lane (each canvas covers only the visible width). */
+  drawLanes() {
+    const dpr = window.devicePixelRatio || 1;
+    const { x0, w } = this.viewport();
+    const playTick = this.engine.currentTick();
+    for (const row of this.rows.querySelectorAll('.alane')) {
+      const data = laneData(this.store.project, row.dataset.track, row.dataset.lane);
+      if (data) drawLane(row.firstChild, { data, x0, w, ppt: this.pxPerTick, dpr, playTick });
+    }
+  }
+
+  previewLane(row, data) {
+    const { x0, w } = this.viewport();
+    drawLane(row.firstChild, { data, x0, w, ppt: this.pxPerTick, dpr: window.devicePixelRatio || 1 });
   }
 
   updatePlayhead() {
@@ -316,9 +344,14 @@ export class Timeline {
   }
 
   // ---------- lane / clip interaction ----------
+  /** Index (in project.tracks) of the track row under a screen y, or -1. */
   laneIndexAtY(clientY) {
-    const rect = this.rows.getBoundingClientRect();
-    return Math.floor((clientY - rect.top) / this.laneH);
+    const rows = [...this.rows.querySelectorAll('.lane')];
+    for (const r of rows) {
+      const rect = r.getBoundingClientRect();
+      if (clientY >= rect.top && clientY < rect.bottom) return this.store.project.tracks.findIndex((t) => t.id === r.dataset.track);
+    }
+    return -1;
   }
 
   bindLanes() {
@@ -366,11 +399,13 @@ export class Timeline {
         } else {
           newStart = m.snap(origStart + dxTicks, snap);
           clipEl.style.left = `${this.tickToX(newStart)}px`;
-          const li = Math.max(0, Math.min(this.store.project.tracks.length - 1, this.laneIndexAtY(ev.clientY)));
+          const li = this.laneIndexAtY(ev.clientY);
           const target = this.store.project.tracks[li];
           if (target && target.type === track.type) {
             newLane = li;
-            clipEl.style.transform = `translateY(${(li - origLane) * this.laneH}px)`;
+            const from = this.rows.querySelector(`.lane[data-track="${track.id}"]`).getBoundingClientRect().top;
+            const to = this.rows.querySelector(`.lane[data-track="${target.id}"]`).getBoundingClientRect().top;
+            clipEl.style.transform = `translateY(${to - from}px)`;
           }
         }
       };

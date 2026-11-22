@@ -1,4 +1,4 @@
-# DAWG HAUS — Phase 3
+# DAWG HAUS — Phase 4
 
 A browser-based digital audio workstation (PWA) for Windows 11 and Chromebooks.
 Plain HTML/CSS/JavaScript with no build step: upload the folder to any static host and it runs.
@@ -20,6 +20,14 @@ Opening `index.html` directly from disk will **not** work, because browsers bloc
 
 Upload the changed files, then raise `VERSION` in `sw.js` (for example `dawghaus-v0.2.1`).
 Installed copies pick up the update the next time they're opened.
+
+## New in Phase 4
+
+- Effects on every track and on the master: EQ, Compressor, Distortion (overdrive, distortion, fuzz, bit crush), Filter (with tempo-synced wobble), Chorus, Phaser, Delay (tempo-synced, ping-pong), Reverb, and Tremolo / Auto-pan
+  - Effects tab (or the FX button on a track): add, reorder, bypass and remove effects; double-click a slider to reset it
+- Automation (A button on a track, or ⤴ next to an effect setting): lanes for volume, pan and effect settings
+  - click to add points, drag to move them, double-click or right-click to delete; Alt ignores the grid
+- Tempo lane (Tempo ⤴ button): add points to speed up or slow down the whole song; changes ramp smoothly, and tempo-synced delays and wobbles follow along
 
 ## New in Phase 3
 
@@ -87,6 +95,10 @@ js/ui/pianoroll.js          piano roll editor
 js/ui/dock.js               bottom panel, instrument panel, on-screen keyboard
 js/audio/drums.js           drum kits (synthesized voices) + starter beats
 js/ui/drumeditor.js         beat editor (step sequencer)
+js/audio/effects.js         insert effects
+js/automation.js            automation targets + lane math
+js/ui/fxpanel.js            Effects tab
+js/ui/autolanes.js          automation + tempo lanes in the timeline
 samples/                    instrument samples (see samples/CREDITS.txt)
 js/ui/*.js                  timeline, track headers, mixer, modal helpers
 sw.js, manifest.webmanifest PWA (offline + install)
@@ -94,7 +106,6 @@ sw.js, manifest.webmanifest PWA (offline + install)
 
 ## Next phases
 
-4. Effects and automation (including tempo automation)
 5. Audio/vocal recording with monitoring and autotune
 6. Sampler
 7. WAV/MP3 export
