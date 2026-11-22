@@ -1,12 +1,12 @@
 {
-  "name": "benDAWmin",
-  "short_name": "benDAWmin",
+  "name": "DAWG HAUS",
+  "short_name": "DAWG HAUS",
   "description": "A digital audio workstation that runs on Windows and Chromebooks.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone"],
-  "background_color": "#121418",
+  "background_color": "#151920",
   "theme_color": "#121418",
   "orientation": "landscape",
   "icons": [

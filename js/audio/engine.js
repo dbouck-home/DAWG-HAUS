@@ -2,7 +2,8 @@
 // live input and MIDI recording.
 import { MeterMap, TempoMap } from '../timing.js';
 import { Synth } from './synth.js';
-import { getPreset } from './presets.js';
+import { effectivePreset } from './presets.js';
+import { Sampler } from './sampler.js';
 
 const LOOKAHEAD = 0.12; // seconds scheduled ahead
 const INTERVAL = 25; // ms between scheduler runs
@@ -102,10 +103,20 @@ export class Engine {
       if (!ch) { ch = new Channel(this.ctx, this.master); this.channels.set(t.id, ch); }
       if (t.type === 'instrument') {
         const pid = t.instrument?.preset;
+        const pr = effectivePreset(t);
         if (ch.presetId !== pid) {
           ch.instrument?.dispose();
-          ch.instrument = new Synth(this.ctx, getPreset(pid), ch.input);
+          ch.instrument = pr.kind === 'sample' ? new Sampler(this.ctx, pr, ch.input) : new Synth(this.ctx, pr, ch.input);
           ch.presetId = pid;
+          ch.paramKey = JSON.stringify(t.instrument.params || {});
+          if (!ch.instrument.ready) {
+            const inst = ch.instrument;
+            this.emit('loading', t.id, true);
+            inst.loading.then(() => this.emit('loading', t.id, false), () => this.emit('loading', t.id, 'error'));
+          }
+        } else {
+          const key = JSON.stringify(t.instrument.params || {});
+          if (key !== ch.paramKey) { ch.instrument.setPreset(pr); ch.paramKey = key; }
         }
       }
       const audible = !t.mute && (!anySolo || t.solo);
@@ -250,6 +261,7 @@ export class Engine {
     this.ensureContext();
     const ch = this.channels.get(trackId);
     ch?.instrument?.noteOn(pitch, vel, this.ctx.currentTime);
+    this.emit('live', pitch, true);
     if (this.recording && this.playing && trackId === this.recordTrackId) {
       const tick = Math.round(this.currentTick());
       const n = { tick, p: pitch, v: vel, d: null };
@@ -262,6 +274,7 @@ export class Engine {
     if (!this.ctx) return;
     const ch = this.channels.get(trackId);
     ch?.instrument?.noteOff(pitch, this.ctx.currentTime, true);
+    this.emit('live', pitch, false);
     const n = this.openRec.get(pitch);
     if (n) { this.closeRec(n, Math.round(this.currentTick())); this.openRec.delete(pitch); }
   }
@@ -302,6 +315,22 @@ export class Engine {
     this.recorded = [];
     if (notes.length) this.emit('recorded', { trackId: this.recordTrackId, notes });
     this.emit('transport');
+  }
+
+  /** True while a track's samples are still downloading. */
+  isLoading(trackId) {
+    const ch = this.channels.get(trackId);
+    return !!ch?.instrument && !ch.instrument.ready;
+  }
+
+  /** Short preview of a note (piano roll clicks). */
+  preview(trackId, pitch, vel = 100, dur = 0.35) {
+    this.ensureContext();
+    const inst = this.channels.get(trackId)?.instrument;
+    if (!inst) return;
+    const t = this.ctx.currentTime;
+    inst.noteOn(pitch, vel, t);
+    inst.noteOff(pitch, t + dur);
   }
 
   // ---------- meters ----------

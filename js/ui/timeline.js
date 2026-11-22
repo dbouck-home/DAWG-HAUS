@@ -7,10 +7,11 @@ import { h } from './dom.js';
 const LOOP_STRIP = 15;
 
 export class Timeline {
-  constructor({ store, engine, onEditMeter }) {
+  constructor({ store, engine, onEditMeter, onOpenClip }) {
     this.store = store;
     this.engine = engine;
     this.onEditMeter = onEditMeter;
+    this.onOpenClip = onOpenClip;
     this.arrange = document.getElementById('arrange');
     this.inner = document.getElementById('arrange-inner');
     this.ruler = document.getElementById('ruler');
@@ -395,7 +396,9 @@ export class Timeline {
 
     this.rows.addEventListener('dblclick', (e) => {
       const laneEl = e.target.closest('.lane');
-      if (!laneEl || e.target.closest('.clip')) return;
+      const clipEl = e.target.closest('.clip');
+      if (clipEl) { this.onOpenClip?.(clipEl.dataset.clip); return; }
+      if (!laneEl) return;
       const track = this.store.track(laneEl.dataset.track);
       if (!track || track.type !== 'instrument') return;
       const rect = this.rows.getBoundingClientRect();
@@ -407,6 +410,7 @@ export class Timeline {
       const clip = newClip(start, len, []);
       this.store.mutate((p) => { p.tracks.find((t) => t.id === track.id).clips.push(clip); });
       this.store.setUI({ selectedClipId: clip.id });
+      this.onOpenClip?.(clip.id);
     });
   }
 }

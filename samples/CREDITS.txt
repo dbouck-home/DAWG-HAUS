@@ -1,0 +1,10 @@
+DAWG HAUS instrument samples
+
+The sampled instruments come from the "tonejs-instruments" collection by Nicholas Brosowsky
+(https://github.com/nbrosowsky/tonejs-instruments), distributed on npm as tonejs-instrument-*-mp3.
+That collection gathers free samples, mainly from the Philharmonia Orchestra sample library,
+the Salamander Grand Piano (Alexander Holm, CC-BY 3.0), and other free sources, released for free use
+under Creative Commons Attribution 3.0 (CC-BY 3.0).
+
+For DAWG HAUS the samples were thinned to at most every 3 semitones, trimmed, and re-encoded to 96 kbps mono.
+"Bass Clarinet" uses the clarinet samples played an octave lower with a darker tone.

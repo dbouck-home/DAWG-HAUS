@@ -18,6 +18,10 @@ export class Synth {
     this.sustained = new Set(); // voices waiting for pedal up
   }
 
+  get ready() { return true; }
+
+  setPreset(pr) { this.preset = pr; }
+
   noteOn(pitch, velocity = 100, time = this.ctx.currentTime) {
     const ctx = this.ctx;
     const pr = this.preset;

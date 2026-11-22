@@ -41,7 +41,7 @@ export class TrackHeaders {
       this.meters.set(t.id, meter);
       const volLabel = h('span', { class: 'vol-label' }, fmtDb(t.volume));
       const row2 = t.type === 'instrument'
-        ? instrumentSelect(t, (v) => this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).instrument.preset = v; }))
+        ? instrumentSelect(t, (v) => this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).instrument = { preset: v, params: {} }; }))
         : h('span', { class: 'type-tag' }, 'Audio track · recording arrives in Phase 5');
       const el = h('div', {
         class: `th ${selected ? 'selected' : ''}`,
@@ -52,6 +52,7 @@ export class TrackHeaders {
       h('div', { class: 'body' },
         h('div', { class: 'row' },
           nameEl,
+          this.engine.isLoading(t.id) ? h('span', { class: 'loading-tag', title: 'Downloading instrument samples' }, '⏳') : null,
           t.type === 'instrument' ? h('span', { class: 'live-ind', title: 'Your MIDI keyboard and computer keyboard play this track' }, '🎹') : null,
           h('button', { class: `sb m ${t.mute ? 'active' : ''}`, title: 'Mute', onclick: () => this.toggle(t, 'mute') }, 'M'),
           h('button', { class: `sb s ${t.solo ? 'active' : ''}`, title: 'Solo', onclick: () => this.toggle(t, 'solo') }, 'S'),

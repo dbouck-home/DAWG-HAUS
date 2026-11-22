@@ -1,4 +1,4 @@
-// Timing math for benDAWmin.
+// Timing math for DAWG HAUS.
 // All musical positions are stored in ticks. PPQ = ticks per quarter note.
 // Meters (time signatures) are stored by bar index; tempo changes by tick.
 
@@ -123,9 +123,27 @@ export class MeterMap {
     if (grid === 'bar') unit = s.barTicks;
     else if (grid === 'beat') unit = s.beatTicks;
     else unit = grid;
-    const rel = t - s.startTick;
-    const n = mode === 'floor' ? Math.floor(rel / unit) : Math.round(rel / unit);
-    return s.startTick + n * unit;
+    if (grid === 'bar' || grid === 'beat') {
+      const rel = t - s.startTick;
+      const n = mode === 'floor' ? Math.floor(rel / unit) : Math.round(rel / unit);
+      return s.startTick + n * unit;
+    }
+    // fixed note values snap relative to the start of the bar, so odd meters stay aligned
+    const bar = Math.floor(this.tickToBar(t) + 1e-9);
+    const barStart = this.barToTick(bar);
+    const barEnd = this.barToTick(bar + 1);
+    const rel = t - barStart;
+    const n = mode === 'floor' ? Math.floor(rel / unit + 1e-9) : Math.round(rel / unit);
+    let out = barStart + n * unit;
+    // the last step in a bar may be shorter than the grid (e.g. 1/4 grid in 7/8): allow snapping to the barline
+    if (mode !== 'floor' && (out > barEnd || barEnd - t < Math.abs(t - out))) out = barEnd;
+    return out;
+  }
+
+  /** Index of the grid step within its bar (used for swing). */
+  gridIndexInBar(tick, unit) {
+    const bar = Math.floor(this.tickToBar(tick) + 1e-9);
+    return Math.round((tick - this.barToTick(bar)) / unit);
   }
 
   /** Snap grid size in ticks at a position (for nudging/resizing). */
@@ -220,3 +238,21 @@ export const SNAP_OPTIONS = [
   { label: '1/32', value: PPQ / 8 },
   { label: 'Off', value: 'off' },
 ];
+
+/** Grid values for the piano roll (ticks). T = triplet. */
+export const NOTE_GRIDS = [
+  { label: '1/1', value: PPQ * 4 },
+  { label: '1/2', value: PPQ * 2 },
+  { label: '1/4', value: PPQ },
+  { label: '1/8', value: PPQ / 2 },
+  { label: '1/16', value: PPQ / 4 },
+  { label: '1/32', value: PPQ / 8 },
+  { label: '1/4 T', value: (PPQ * 2) / 3 },
+  { label: '1/8 T', value: PPQ / 3 },
+  { label: '1/16 T', value: PPQ / 6 },
+  { label: '1/32 T', value: PPQ / 12 },
+  { label: 'Off', value: 'off' },
+];
+
+export const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+export const noteName = (p) => `${NOTE_NAMES[p % 12]}${Math.floor(p / 12) - 1}`;

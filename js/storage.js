@@ -1,5 +1,5 @@
 // Local project storage (IndexedDB). Everything stays on this device.
-const DB_NAME = 'bendawmin';
+const DB_NAME = 'bendawmin'; // original name kept so songs made in earlier versions stay
 const STORE = 'projects';
 
 function openDB() {
@@ -60,12 +60,12 @@ export function lastProjectId() {
   try { return localStorage.getItem('bendawmin:last'); } catch { return null; }
 }
 
-/** Download the project as a .bendawmin file (to move between computers). */
+/** Download the project as a .dawghaus file (to move between computers). */
 export function exportProjectFile(project) {
   const blob = new Blob([JSON.stringify(project, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${(project.name || 'song').replace(/[^\w\- ]+/g, '').trim() || 'song'}.bendawmin`;
+  a.download = `${(project.name || 'song').replace(/[^\w\- ]+/g, '').trim() || 'song'}.dawghaus`;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -75,11 +75,11 @@ export function pickProjectFile() {
   return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.bendawmin,.json,application/json';
+    input.accept = '.dawghaus,.bendawmin,.json,application/json';
     input.onchange = async () => {
       const f = input.files?.[0];
       if (!f) return resolve(null);
-      try { resolve(JSON.parse(await f.text())); } catch (e) { reject(new Error('That file is not a benDAWmin project.')); }
+      try { resolve(JSON.parse(await f.text())); } catch (e) { reject(new Error('That file is not a DAWG HAUS song.')); }
     };
     input.click();
   });

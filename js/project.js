@@ -68,11 +68,11 @@ export function newProject(name = 'Untitled Song') {
 
 /** A small demo song so there is something to hear on first launch. */
 export function demoProject() {
-  const p = newProject('Welcome to benDAWmin');
+  const p = newProject('Welcome to the DAWG HAUS');
   const q = PPQ;
   const pad = newTrack('instrument', 'string-pad');
   const bass = newTrack('instrument', 'sub-bass');
-  const keys = newTrack('instrument', 'soft-keys');
+  const keys = newTrack('instrument', 'grand-piano');
 
   // Am - F - C - G, one bar each, repeated twice
   const chords = [

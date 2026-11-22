@@ -1,8 +1,11 @@
-// benDAWmin — app entry point. Wires the store, audio engine and UI together.
+// DAWG HAUS — app entry point. Wires the store, audio engine and UI together.
 import { MeterMap, TempoMap, SNAP_OPTIONS, VALID_DENOMINATORS, formatTime, parseGrouping, PPQ } from './timing.js';
 import { Store } from './store.js';
 import { Engine } from './audio/engine.js';
 import { PRESETS, CATEGORY_COLORS } from './audio/presets.js';
+import { growl } from './audio/growl.js';
+import { PianoRoll } from './ui/pianoroll.js';
+import { Dock, InstrumentPanel, OnscreenKeyboard } from './ui/dock.js';
 import { demoProject, newProject, newTrack, newClip, migrateProject } from './project.js';
 import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject } from './storage.js';
 import { MidiInput, KEYMAP } from './midi.js';
@@ -22,20 +25,45 @@ async function boot() {
 
   const store = new Store(project);
   const engine = new Engine(() => store.project);
-  const timeline = new Timeline({ store, engine, onEditMeter: (bar) => meterDialog(bar) });
+  Object.assign(store.ui, { dockOpen: false, dockTab: 'pianoroll', dockHeight: 340 });
+  const timeline = new Timeline({ store, engine, onEditMeter: (bar) => meterDialog(bar), onOpenClip: (id) => openClip(id) });
   const headers = new TrackHeaders({ store, engine });
   const mixer = new Mixer({ store, engine });
-  window.benDAWmin = { store, engine }; // handy for debugging
+  const pianoRoll = new PianoRoll({ store, engine, root: $('pr-root') });
+  const instPanel = new InstrumentPanel({ store, engine, root: $('inst-root') });
+  const liveTrackId = () => { const t = store.selectedTrack(); return t && t.type === 'instrument' ? t.id : null; };
+  const onscreenKb = new OnscreenKeyboard({ store, engine, root: $('kb-root'), liveTrack: liveTrackId });
+  const dock = new Dock({ store, onChange: () => { renderDock(); renderTransportFields(); timeline.layout(); } });
+
+  function renderDock() {
+    if (!dock.open) return;
+    if (dock.tab === 'pianoroll') pianoRoll.refresh();
+    if (dock.tab === 'instrument') instPanel.render();
+    if (dock.tab === 'mixer') mixer.render();
+    if (dock.tab === 'keyboard') onscreenKb.render();
+  }
+
+  function openClip(id) {
+    const f = store.findClip(id);
+    if (!f) return;
+    store.ui.selectedClipId = id;
+    store.ui.selectedTrackId = f.track.id;
+    store.emit('selection');
+    pianoRoll.open(id);
+    dock.show('pianoroll');
+    pianoRoll.active = true;
+  }
+  window.dawgHaus = { store, engine }; // handy for debugging
   let lastMeterLabel = null;
 
   // ---------- rendering ----------
   function renderAll() {
     const p = store.project;
     $('project-name').textContent = p.name;
-    document.title = `${p.name} — benDAWmin`;
+    document.title = `${p.name} — DAWG HAUS`;
     headers.render();
     timeline.render();
-    if (store.ui.mixerOpen) mixer.render();
+    renderDock();
     renderTransportFields();
     $('btn-undo').disabled = !store.canUndo();
     $('btn-redo').disabled = !store.canRedo();
@@ -50,15 +78,14 @@ async function boot() {
     $('inp-click-vol').value = p.metronome.volume;
     $('btn-play').classList.toggle('active', engine.playing);
     $('btn-record').classList.toggle('active', engine.recording);
-    $('btn-mixer').classList.toggle('active', store.ui.mixerOpen);
-    $('mixer').hidden = !store.ui.mixerOpen;
+    for (const tab of ['pianoroll', 'instrument', 'mixer', 'keyboard']) $(`btn-tab-${tab}`).classList.toggle('active', dock.open && dock.tab === tab);
     $('sel-snap').value = String(store.ui.snap);
     lastMeterLabel = null;
   }
 
   function renderStatus() {
     const oct = store.ui.octave;
-    $('status-kb').innerHTML = `Computer keyboard: <kbd>A</kbd>–<kbd>K</kbd> play notes · <kbd>Z</kbd>/<kbd>X</kbd> octave (C${oct}) · <kbd>C</kbd>/<kbd>V</kbd> velocity (${store.ui.kbVelocity}) · <kbd>Space</kbd> play · <kbd>R</kbd> record · <kbd>Del</kbd> delete clip · double-click a lane for an empty clip`;
+    $('status-kb').innerHTML = `Computer keyboard: <kbd>A</kbd>–<kbd>K</kbd> play notes · <kbd>Z</kbd>/<kbd>X</kbd> octave (C${oct}) · <kbd>C</kbd>/<kbd>V</kbd> velocity (${store.ui.kbVelocity}) · <kbd>Space</kbd> play · <kbd>R</kbd> record · <kbd>Del</kbd> delete · double-click a clip to edit notes · click the dog house 🐕`;
   }
 
   function renderSave() {
@@ -73,6 +100,7 @@ async function boot() {
     else if (kind === 'silent') { engine.sync(); }
     else if (kind === 'ui' || kind === 'selection') {
       headers.updateSelection(); mixer.updateSelection(); timeline.updateSelection();
+      if (dock.open && (dock.tab === 'instrument' || dock.tab === 'keyboard')) renderDock();
       renderTransportFields(); renderStatus(); timeline.drawStatic();
     } else if (kind === 'save') renderSave();
     if (kind === 'project' || kind === 'silent' || kind === 'load') {
@@ -81,6 +109,7 @@ async function boot() {
     }
   });
   engine.on('transport', renderTransportFields);
+  engine.on('loading', () => { headers.render(); if (dock.open && dock.tab === 'instrument') instPanel.render(); });
 
   // ---------- transport ----------
   const snapSel = $('sel-snap');
@@ -104,11 +133,19 @@ async function boot() {
   $('inp-click-vol').oninput = (e) => store.mutate((p) => { p.metronome.volume = +e.target.value; }, { merge: 'clickvol', silent: true });
   $('btn-zoom-in').onclick = () => timeline.zoom(1.3);
   $('btn-zoom-out').onclick = () => timeline.zoom(1 / 1.3);
-  $('btn-mixer').onclick = () => {
-    store.ui.mixerOpen = !store.ui.mixerOpen;
-    if (store.ui.mixerOpen) mixer.render();
-    renderTransportFields();
-    timeline.layout();
+  for (const tab of ['pianoroll', 'instrument', 'mixer', 'keyboard']) {
+    $(`btn-tab-${tab}`).onclick = () => {
+      if (tab === 'pianoroll' && !pianoRoll.clipId && store.ui.selectedClipId) pianoRoll.open(store.ui.selectedClipId);
+      dock.toggle(tab);
+    };
+  }
+  $('arrange').addEventListener('pointerdown', () => { pianoRoll.active = false; }, true);
+  $('logo').onclick = () => {
+    const ctx = engine.ensureContext();
+    growl(ctx);
+    const logo = $('logo');
+    logo.classList.add('growling');
+    setTimeout(() => logo.classList.remove('growling'), 1300);
   };
   $('btn-undo').onclick = () => store.undo();
   $('btn-redo').onclick = () => store.redo();
@@ -146,6 +183,7 @@ async function boot() {
     store.mutate((p) => { p.tracks.find((t) => t.id === trackId)?.clips.push(clip); });
     store.ui.selectedClipId = clip.id;
     timeline.updateSelection();
+    if (dock.open && dock.tab === 'pianoroll') pianoRoll.open(clip.id);
     toast(`Recorded ${notes.length} note${notes.length === 1 ? '' : 's'}.`);
   });
 
@@ -206,7 +244,6 @@ async function boot() {
 
   // ---------- add track ----------
   $('btn-add-track').onclick = () => {
-    const grid = h('div', { class: 'choice-grid' });
     let closeFn;
     const add = (type, preset) => {
       const t = newTrack(type, preset);
@@ -214,21 +251,22 @@ async function boot() {
       store.setUI({ selectedTrackId: t.id, selectedClipId: null });
       closeFn();
     };
-    for (const pr of PRESETS) {
-      grid.append(h('button', { class: 'choice', onclick: () => add('instrument', pr.id) },
-        h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS[pr.category] } }), pr.name),
-        h('small', {}, `${pr.category}${pr.mono ? ' · mono' : ''}`)));
+    const body = h('div', {});
+    for (const cat of [...new Set(PRESETS.map((x) => x.category))]) {
+      const g = h('div', { class: 'choice-grid' });
+      for (const pr of PRESETS.filter((x) => x.category === cat)) {
+        g.append(h('button', { class: 'choice', onclick: () => add('instrument', pr.id) },
+          h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS[pr.category] } }), pr.name),
+          h('small', {}, `${pr.kind === 'sample' ? 'sampled' : 'synth'}${pr.mono ? ' · mono' : ''}`)));
+      }
+      body.append(h('div', { class: 'section-label' }, cat), g);
     }
-    grid.append(h('button', { class: 'choice', onclick: () => add('audio') },
-      h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Audio } }), 'Audio Track'),
-      h('small', {}, 'Vocals & mics · recording arrives in Phase 5')));
-    closeFn = openModal({
-      title: 'Add a track',
-      body: h('div', {}, h('div', { class: 'section-label' }, 'Instruments'), grid,
-        h('div', { class: 'hint', style: { marginTop: '10px' } }, 'Sampled instruments (grand piano, bass clarinet, strings…), the drum machine and the sampler arrive in the next phases.')),
-      buttons: [{ label: 'Cancel' }],
-      width: '520px',
-    });
+    body.append(h('div', { class: 'section-label' }, 'Audio'), h('div', { class: 'choice-grid' },
+      h('button', { class: 'choice', onclick: () => add('audio') },
+        h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Audio } }), 'Audio Track'),
+        h('small', {}, 'vocals & mics · recording in Phase 5'))),
+      h('div', { class: 'hint', style: { marginTop: '10px' } }, 'The drum machine arrives in Phase 3 and the sampler in Phase 6.'));
+    closeFn = openModal({ title: 'Add a track', body, buttons: [{ label: 'Cancel' }], width: '720px' });
   };
 
   // ---------- songs (projects) ----------
@@ -287,7 +325,7 @@ async function boot() {
     engine.stop();
     await store.saveNow();
     const p = newProject();
-    p.tracks.push(newTrack('instrument', 'soft-keys'));
+    p.tracks.push(newTrack('instrument', 'grand-piano'));
     store.load(p);
     toast('New song created.');
   }
@@ -331,6 +369,7 @@ async function boot() {
 
   document.addEventListener('keydown', (e) => {
     if (isModalOpen() || isTyping(e)) return;
+    if (dock.open && dock.tab === 'pianoroll' && pianoRoll.handleKey(e)) { e.preventDefault(); return; }
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) store.redo(); else store.undo(); return; }
     if (ctrl && e.code === 'KeyY') { e.preventDefault(); store.redo(); return; }
@@ -341,8 +380,8 @@ async function boot() {
     if (e.code === 'Home' || e.code === 'Enter') { e.preventDefault(); engine.setPosition(0); timeline.arrange.scrollLeft = 0; return; }
     if (e.code === 'KeyR') { if (!e.repeat) toggleRecord(); return; }
     if (e.code === 'Delete' || e.code === 'Backspace') { deleteClip(); return; }
-    if (e.code === 'KeyZ') { store.ui.octave = Math.max(0, store.ui.octave - 1); renderStatus(); return; }
-    if (e.code === 'KeyX') { store.ui.octave = Math.min(8, store.ui.octave + 1); renderStatus(); return; }
+    if (e.code === 'KeyZ') { store.ui.octave = Math.max(0, store.ui.octave - 1); store.emit('ui'); return; }
+    if (e.code === 'KeyX') { store.ui.octave = Math.min(7, store.ui.octave + 1); store.emit('ui'); return; }
     if (e.code === 'KeyC') { store.ui.kbVelocity = Math.max(10, store.ui.kbVelocity - 10); renderStatus(); return; }
     if (e.code === 'KeyV') { store.ui.kbVelocity = Math.min(127, store.ui.kbVelocity + 10); renderStatus(); return; }
     if (e.code in KEYMAP) {
@@ -393,9 +432,10 @@ async function boot() {
     const label = `${bbt.meter.num}/${bbt.meter.den}`;
     if (label !== lastMeterLabel) { $('btn-meter').textContent = label; lastMeterLabel = label; }
     timeline.updatePlayhead();
+    if (engine.playing && dock.open && dock.tab === 'pianoroll') pianoRoll.draw();
     if (engine.ctx) {
       headers.updateMeters();
-      if (store.ui.mixerOpen) mixer.updateMeters();
+      if (dock.open && dock.tab === 'mixer') mixer.updateMeters();
     }
     requestAnimationFrame(frame);
   }
@@ -435,12 +475,12 @@ function setupPWA() {
     deferred = null;
     btn.hidden = true;
   };
-  window.addEventListener('appinstalled', () => { btn.hidden = true; toast('benDAWmin is installed.'); });
+  window.addEventListener('appinstalled', () => { btn.hidden = true; toast('DAWG HAUS is installed.'); });
 }
 
 boot().catch((e) => {
   console.error(e);
-  document.body.innerHTML = `<div style="padding:40px;color:#fff;font-family:system-ui">benDAWmin failed to start: ${String(e.message || e)}</div>`;
+  document.body.innerHTML = `<div style="padding:40px;color:#fff;font-family:system-ui">DAWG HAUS failed to start: ${String(e.message || e)}</div>`;
 });
 
 export { PPQ };

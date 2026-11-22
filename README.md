@@ -1,4 +1,4 @@
-# benDAWmin — Phase 1
+# DAWG HAUS — Phase 2
 
 A browser-based digital audio workstation (PWA) for Windows 11 and Chromebooks.
 Plain HTML/CSS/JavaScript with no build step: upload the folder to any static host and it runs.
@@ -18,8 +18,28 @@ Opening `index.html` directly from disk will **not** work, because browsers bloc
 
 ## Updating
 
-Upload the changed files, then raise `VERSION` in `sw.js` (for example `v0.1.1`).
+Upload the changed files, then raise `VERSION` in `sw.js` (for example `dawghaus-v0.2.1`).
 Installed copies pick up the update the next time they're opened.
+
+## New in Phase 2
+
+- Renamed to DAWG HAUS, with a dog-house icon. Click the dog house to make it growl.
+- 21 sampled instruments: Grand Piano, Organ, Harmonium, Flute, Clarinet, Bass Clarinet, Bassoon, Saxophone, Trumpet, Trombone, French Horn, Tuba, Violin, Cello, Double Bass, Harp, Acoustic/Nylon/Electric Guitar, Electric Bass and Xylophone. Samples download the first time an instrument is used, then work offline.
+- Instrument panel: gain, brightness, resonance, attack, release, transpose and velocity response for sampled instruments, plus filter sweep, decay, sustain, detune and glide for synths. Settings are saved per track; double-click a slider to reset it.
+- Piano roll (double-click a clip):
+  - grid 1/1 to 1/32, plus triplets (1/4T, 1/8T, 1/16T, 1/32T)
+  - draw, move, resize and delete notes; box-select
+  - velocity lane: drag across the bars to set velocity
+  - quantize with strength, swing and optional note ends; Q repeats the last quantize
+  - transpose, nudge, copy/paste and duplicate
+  - click the piano keys to hear notes
+- On-screen keyboard tab (click or drag across the keys; it also lights up when you play MIDI)
+- Bottom panel with Piano Roll, Instrument, Mixer and Keyboard tabs; drag its top edge to resize it
+
+### Piano roll shortcuts
+Click empty grid: add a note (drag to set its length) · Shift+drag: box-select · double-click or right-click a note: delete ·
+drag a note's right edge: resize · Alt while dragging: ignore the grid · ↑/↓: transpose (Shift = octave) · ←/→: nudge by the grid ·
+Ctrl+A/C/V/D: select all / copy / paste / duplicate · Q: quantize · Del: delete selected notes
 
 ## What's in Phase 1
 
@@ -47,14 +67,18 @@ js/storage.js               IndexedDB + song backup files
 js/midi.js                  Web MIDI input
 js/audio/engine.js          scheduler, mixer channels, metronome, recording
 js/audio/synth.js           synthesizer voice engine
-js/audio/presets.js         instrument presets
+js/audio/presets.js         instrument presets + adjustable parameters
+js/audio/sampler.js         sampled-instrument engine
+js/audio/growl.js           the dog house growl
+js/ui/pianoroll.js          piano roll editor
+js/ui/dock.js               bottom panel, instrument panel, on-screen keyboard
+samples/                    instrument samples (see samples/CREDITS.txt)
 js/ui/*.js                  timeline, track headers, mixer, modal helpers
 sw.js, manifest.webmanifest PWA (offline + install)
 ```
 
 ## Next phases
 
-2. Piano roll (grid down to 1/32, triplets, velocity, quantize) and sampled instruments
 3. Drum machine with preset kits
 4. Effects and automation (including tempo automation)
 5. Audio/vocal recording with monitoring and autotune
