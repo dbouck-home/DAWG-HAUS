@@ -131,3 +131,52 @@ export function migrateProject(p) {
   applyAutoLabels(out);
   return out;
 }
+
+// ---------- repeating clips ----------
+// A clip may repeat its pattern: clip.loop = pattern length (ticks). The clip's length can then be
+// longer than the pattern, and the notes play again every `loop` ticks.
+
+/** Length of the clip's own pattern (what the editors show). */
+export function patternLength(clip) {
+  return clip.loop && clip.loop > 0 ? clip.loop : clip.length;
+}
+
+/** How many times the pattern plays (may be fractional when the last repeat is cut short). */
+export function repeatCount(clip) {
+  return clip.length / patternLength(clip);
+}
+
+/** Every note the clip plays, with repeats written out (times relative to the clip start). */
+export function expandNotes(clip) {
+  const L = patternLength(clip);
+  if (!clip.loop || clip.length <= L) return clip.notes.map((n) => ({ ...n }));
+  const out = [];
+  for (let base = 0; base < clip.length; base += L) {
+    for (const n of clip.notes) {
+      if (n.t >= L) continue;
+      const t = base + n.t;
+      if (t >= clip.length) continue;
+      out.push({ ...n, id: undefined, t, d: Math.min(n.d, L - n.t, clip.length - t) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Split a clip at song tick `at`. Returns [left, right] (new objects) or null if `at` isn't inside it.
+ * Repeats are written out so both halves sound exactly like before.
+ */
+export function splitClip(clip, at) {
+  const rel = Math.round(at - clip.start);
+  if (rel <= 0 || rel >= clip.length) return null;
+  const notes = expandNotes(clip);
+  const base = { ...clip };
+  delete base.loop;
+  const left = { ...base, id: uid('clp'), length: rel, notes: [] };
+  const right = { ...base, id: uid('clp'), start: clip.start + rel, length: clip.length - rel, notes: [] };
+  for (const n of notes) {
+    if (n.t < rel) left.notes.push({ ...n, d: Math.min(n.d, rel - n.t) });
+    else right.notes.push({ ...n, t: n.t - rel });
+  }
+  return [left, right];
+}

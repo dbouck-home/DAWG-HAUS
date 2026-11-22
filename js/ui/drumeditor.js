@@ -7,6 +7,7 @@ import { CATEGORY_COLORS } from '../audio/presets.js';
 import { h, toast } from './dom.js';
 import { setup, ensureNoteIds } from './pianoroll.js';
 import { shade } from './timeline.js';
+import { patternLength } from '../project.js';
 
 const ROW_H = 26;
 const NAMES_W = 130;
@@ -136,13 +137,14 @@ export class BeatEditor {
     const c = this.clip;
     const m = this.meter;
     const out = [];
+    const len = patternLength(c);
     let bar = Math.floor(m.tickToBar(c.start) + 1e-9);
     for (let guard = 0; guard < 500; guard++, bar++) {
       const bs = m.barToTick(bar) - c.start;
       const be = m.barToTick(bar + 1) - c.start;
-      if (bs >= c.length) break;
-      for (let t = Math.max(0, bs); t < Math.min(be, c.length) - 1; t += this.grid) {
-        out.push({ t, len: Math.min(this.grid, be - t, c.length - t), barStart: t === Math.max(0, bs) && bs >= 0 });
+      if (bs >= len) break;
+      for (let t = Math.max(0, bs); t < Math.min(be, len) - 1; t += this.grid) {
+        out.push({ t, len: Math.min(this.grid, be - t, len - t), barStart: t === Math.max(0, bs) && bs >= 0 });
       }
     }
     return out;
@@ -164,7 +166,7 @@ export class BeatEditor {
     const x0 = this.scroll.scrollLeft;
     const y0 = this.scroll.scrollTop;
     const rows = this.rows();
-    this.spacer.style.width = `${Math.ceil(c.length * ppt) + 40}px`;
+    this.spacer.style.width = `${Math.ceil(patternLength(c) * ppt) + 40}px`;
     this.spacer.style.height = `${rows.length * ROW_H}px`;
     const cells = this.cells();
     const color = CATEGORY_COLORS.Drums;
@@ -394,13 +396,13 @@ export class BeatEditor {
     for (let guard = 0; guard < 500; guard++, bar++) {
       const bs = m.barToTick(bar) - c.start;
       const be = m.barToTick(bar + 1) - c.start;
-      if (bs >= c.length) break;
+      if (bs >= patternLength(c)) break;
       const stepsInBar = Math.floor((be - bs) / step);
       for (const [note, str] of Object.entries(pt.rows)) {
         for (let i = 0; i < stepsInBar; i++) {
           const ch = str[i % str.length];
           const t = bs + i * step;
-          if (t < 0 || t >= c.length || ch === '-') continue;
+          if (t < 0 || t >= patternLength(c) || ch === '-') continue;
           notes.push({ id: nid(), t, d: step, p: +note, v: ch === 'X' ? 127 : 100 });
         }
       }
@@ -423,14 +425,16 @@ export class BeatEditor {
     const c = this.clip;
     if (!c) return;
     const m = this.meter;
-    const endBar = Math.round(m.tickToBar(c.start + c.length));
+    const endBar = Math.round(m.tickToBar(c.start + patternLength(c)));
     const startBar = Math.floor(m.tickToBar(c.start) + 1e-9);
     const nb = Math.max(startBar + 1, endBar + dir);
     const id = this.clipId;
     this.store.mutate((p) => {
       for (const t of p.tracks) {
         const cc = t.clips.find((x) => x.id === id);
-        if (cc) cc.length = m.barToTick(nb) - cc.start;
+        if (!cc) continue;
+        const nl = m.barToTick(nb) - cc.start;
+        if (cc.loop) { cc.length = Math.round((cc.length / cc.loop) * nl); cc.loop = nl; } else cc.length = nl;
       }
     });
   }

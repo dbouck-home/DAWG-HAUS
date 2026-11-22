@@ -1,11 +1,11 @@
 // Piano roll editor for MIDI clips.
-// Draw mode: click empty space to add a note (drag to set its length), drag notes to move,
-// drag a note's right edge to resize, double-click or right-click a note to delete it.
-// Select mode (or Shift+drag in draw mode): drag a box to select notes.
+// Double-click empty space to add a note, drag notes to move them, drag a note's right edge to resize,
+// double-click or right-click a note to delete it, drag on empty space to box-select (Shift adds).
 import { PPQ, MeterMap, NOTE_GRIDS, noteName } from '../timing.js';
 import { colorForTrack } from '../audio/presets.js';
 import { h, openModal, toast } from './dom.js';
 import { shade } from './timeline.js';
+import { patternLength } from '../project.js';
 
 const ROW_H = 14;
 const KEYS_W = 64;
@@ -28,7 +28,6 @@ export class PianoRoll {
     this.grid = PPQ / 4;
     this.noteLen = 'grid';
     this.newVel = 100;
-    this.tool = 'draw';
     this.pxPerQuarter = 96;
     this.sel = new Set();
     this.work = null; // notes being edited during a drag
@@ -74,14 +73,10 @@ export class PianoRoll {
       NOTE_GRIDS.filter((g) => g.value !== 'off').map((g) => h('option', { value: String(g.value) }, g.label)));
     const velIn = h('input', { type: 'number', min: 1, max: 127, value: this.newVel, title: 'Velocity of new notes', onchange: (e) => { this.newVel = Math.max(1, Math.min(127, +e.target.value || 100)); e.target.value = this.newVel; } });
     velIn.addEventListener('keydown', (e) => e.stopPropagation());
-    this.toolBtns = {
-      draw: h('button', { class: 'pbtn', title: 'Draw: click to add notes', onclick: () => this.setTool('draw') }, '✎ Draw'),
-      select: h('button', { class: 'pbtn', title: 'Select: drag a box around notes', onclick: () => this.setTool('select') }, '⬚ Select'),
-    };
     this.title = h('div', { class: 'pr-title' });
     const toolbar = h('div', { class: 'pr-toolbar' },
       this.title,
-      h('div', { class: 'pgroup' }, this.toolBtns.draw, this.toolBtns.select),
+      h('span', { class: 'pr-hint', title: 'Double-click empty space to add a note · drag a note to move it · drag its right edge to resize · drag empty space to select · double-click or right-click a note to delete it' }, 'Double-click to add notes'),
       h('label', { class: 'pfield' }, 'Grid', gridSel),
       h('label', { class: 'pfield' }, 'Length', lenSel),
       h('label', { class: 'pfield' }, 'Velocity', velIn),
@@ -111,7 +106,6 @@ export class PianoRoll {
       h('div', { class: 'pr-vel-label' }, 'Velocity'),
       h('div', { class: 'pr-vel-wrap' }, this.velCanvas));
     this.root.append(h('div', { class: 'pr' }, toolbar, this.body, this.empty));
-    this.setTool('draw');
 
     this.scroll.addEventListener('scroll', () => this.draw());
     this.scroll.addEventListener('wheel', (e) => {
@@ -124,11 +118,6 @@ export class PianoRoll {
     this.bindGrid();
     this.bindKeys();
     this.bindVelocity();
-  }
-
-  setTool(t) {
-    this.tool = t;
-    for (const [k, b] of Object.entries(this.toolBtns)) b.classList.toggle('active', k === t);
   }
 
   refresh() {
@@ -157,7 +146,7 @@ export class PianoRoll {
   contentTicks() {
     const c = this.clip;
     if (!c) return PPQ * 16;
-    let end = c.length;
+    let end = patternLength(c);
     for (const n of this.notes) end = Math.max(end, n.t + n.d);
     return end + PPQ * 16;
   }
@@ -198,7 +187,7 @@ export class PianoRoll {
     const t1 = (x0 + W) / ppt;
     this.drawTimeLines(g, m, c.start, t0, t1, x0, ppt, H, true);
     // area past the clip end
-    const endX = c.length * ppt - x0;
+    const endX = patternLength(c) * ppt - x0;
     if (endX < W) {
       g.fillStyle = 'rgba(0,0,0,0.35)';
       g.fillRect(Math.max(0, endX), 0, W, H);
@@ -357,9 +346,11 @@ export class PianoRoll {
         c.notes = work.filter((n) => n.d > 0).sort((a, b) => a.t - b.t || a.p - b.p);
         // grow the clip to fit notes drawn past its end
         const end = Math.max(0, ...c.notes.map((n) => n.t + n.d));
-        if (end > c.length) {
+        if (end > patternLength(c)) {
           const endBar = Math.ceil(meter.tickToBar(c.start + end) - 1e-9);
-          c.length = meter.barToTick(endBar) - c.start;
+          const newLen = meter.barToTick(endBar) - c.start;
+          // a repeating clip grows its pattern; a plain clip just gets longer
+          if (c.loop) { c.loop = newLen; c.length = Math.max(c.length, newLen); } else c.length = newLen;
         }
       }
     });
@@ -380,9 +371,24 @@ export class PianoRoll {
       if (hit) { this.beginWork(); this.work = this.work.filter((n) => n.id !== hit.note.id); this.sel.delete(hit.note.id); this.commit(); }
     });
     el.addEventListener('dblclick', (e) => {
+      if (!this.clip) return;
       const { x, y } = this.toContent(e);
       const hit = this.noteAt(x, y);
-      if (hit && this.tool === 'draw') { this.beginWork(); this.work = this.work.filter((n) => n.id !== hit.note.id); this.sel.delete(hit.note.id); this.commit(); }
+      if (hit) {
+        // double-click a note to delete it
+        this.beginWork(); this.work = this.work.filter((n) => n.id !== hit.note.id); this.sel.delete(hit.note.id); this.commit();
+        return;
+      }
+      // double-click empty space to add a note
+      const p = 127 - Math.floor(y / ROW_H);
+      if (p < 0 || p > 127) return;
+      const t = this.snapRel(x / this.ppt, 'floor');
+      this.beginWork();
+      const n = { id: newId(), t, d: this.newNoteLen(), p, v: this.newVel };
+      this.work.push(n);
+      this.sel.clear(); this.sel.add(n.id);
+      this.audition(p, this.newVel);
+      this.commit();
     });
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || !this.clip) return;
@@ -432,7 +438,8 @@ export class PianoRoll {
             if (np !== lastPitch) { lastPitch = np; this.audition(np, n.v); }
           };
         }
-      } else if (this.tool === 'select' || e.shiftKey) {
+      } else {
+        // drag on empty space selects notes with a box (double-click adds a note)
         if (!e.shiftKey) this.sel.clear();
         const before = new Set(this.sel);
         this.box = { x1: x, y1: y, x2: x, y2: y };
@@ -444,24 +451,6 @@ export class PianoRoll {
           const pLo = 127 - Math.floor(Math.max(y, c2.y) / ROW_H);
           this.sel = new Set(before);
           for (const n of this.clip.notes) if (n.t + n.d >= tx1 && n.t <= tx2 && n.p >= pLo && n.p <= pHi) this.sel.add(n.id);
-        };
-      } else {
-        // draw a new note
-        const p = 127 - Math.floor(y / ROW_H);
-        if (p < 0 || p > 127) return;
-        const t = this.snapRel(x / ppt, 'floor');
-        const len = this.newNoteLen();
-        this.beginWork();
-        const n = { id: newId(), t, d: len, p, v: this.newVel };
-        this.work.push(n);
-        this.sel.clear(); this.sel.add(n.id);
-        this.audition(p, this.newVel);
-        moveFn = (ev) => {
-          const cx = this.toContent(ev).x;
-          if (cx - x < 4) return;
-          const endT = this.snapRel(cx / ppt, 'round');
-          n.d = Math.max(this.grid === 'off' ? 15 : this.gridLen(), endT - t);
-          this.lastLen = n.d;
         };
       }
       this.draw();
@@ -483,7 +472,7 @@ export class PianoRoll {
       if (e.buttons) return;
       const { x, y } = this.toContent(e);
       const hit = this.noteAt(x, y);
-      el.style.cursor = hit ? (hit.edge ? 'ew-resize' : 'grab') : this.tool === 'draw' ? 'crosshair' : 'default';
+      el.style.cursor = hit ? (hit.edge ? 'ew-resize' : 'grab') : 'default';
     });
   }
 
@@ -593,7 +582,7 @@ export class PianoRoll {
     // paste at the playhead if it's inside this clip, otherwise right after the selection
     const c = this.clip;
     let at = this.engine.currentTick() - c.start;
-    if (at < 0 || at > c.length) {
+    if (at < 0 || at > patternLength(c)) {
       const sel = c.notes.filter((n) => this.sel.has(n.id));
       at = sel.length ? Math.max(...sel.map((n) => n.t + n.d)) : 0;
     }

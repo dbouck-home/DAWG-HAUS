@@ -9,7 +9,7 @@ import { Dock, InstrumentPanel, OnscreenKeyboard } from './ui/dock.js';
 import { BeatEditor } from './ui/drumeditor.js';
 import { FxPanel } from './ui/fxpanel.js';
 import { KITS, getKit } from './audio/drums.js';
-import { demoProject, newProject, newTrack, newClip, migrateProject } from './project.js';
+import { demoProject, newProject, newTrack, newClip, migrateProject, splitClip } from './project.js';
 import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject } from './storage.js';
 import { MidiInput, KEYMAP } from './midi.js';
 import { Timeline } from './ui/timeline.js';
@@ -103,7 +103,7 @@ async function boot() {
 
   function renderStatus() {
     const oct = store.ui.octave;
-    $('status-kb').innerHTML = `Computer keyboard: <kbd>A</kbd>–<kbd>K</kbd> play notes · <kbd>Z</kbd>/<kbd>X</kbd> octave (C${oct}) · <kbd>C</kbd>/<kbd>V</kbd> velocity (${store.ui.kbVelocity}) · <kbd>Space</kbd> play · <kbd>R</kbd> record · <kbd>Del</kbd> delete · double-click a clip to edit notes · click the dog house 🐕`;
+    $('status-kb').innerHTML = `Computer keyboard: <kbd>A</kbd>–<kbd>K</kbd> play notes · <kbd>Z</kbd>/<kbd>X</kbd> octave (C${oct}) · <kbd>C</kbd>/<kbd>V</kbd> velocity (${store.ui.kbVelocity}) · <kbd>Space</kbd> play · <kbd>R</kbd> record · <kbd>Ctrl</kbd>+<kbd>S</kbd> split at playhead · <kbd>Del</kbd> delete · double-click a clip to edit notes · click the dog house 🐕`;
   }
 
   function renderSave() {
@@ -410,7 +410,7 @@ async function boot() {
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) store.redo(); else store.undo(); return; }
     if (ctrl && e.code === 'KeyY') { e.preventDefault(); store.redo(); return; }
-    if (ctrl && e.code === 'KeyS') { e.preventDefault(); store.saveNow(); toast('Saved.'); return; }
+    if (ctrl && e.code === 'KeyS') { e.preventDefault(); splitAtPlayhead(); return; }
     if (ctrl && e.code === 'KeyD') { e.preventDefault(); duplicateClip(); return; }
     if (ctrl) return;
     if (e.code === 'Space') { e.preventDefault(); if (e.repeat) return; if (document.activeElement?.blur) document.activeElement.blur(); togglePlay(); return; }
@@ -446,6 +446,33 @@ async function boot() {
     for (const n of held.values()) engine.liveNoteOff(n.trackId, n.pitch);
     held.clear();
   });
+
+  /** Ctrl+S: cut clips in two at the playhead (the selected clip, or every clip under the playhead on the selected track). */
+  function splitAtPlayhead() {
+    const at = Math.round(engine.currentTick());
+    const sel = store.findClip(store.ui.selectedClipId);
+    let targets = [];
+    // the selected clip wins, as long as it's on the selected track
+    if (sel && sel.track.id === store.ui.selectedTrackId && at > sel.clip.start && at < sel.clip.start + sel.clip.length) targets = [{ track: sel.track, clip: sel.clip }];
+    else {
+      const t = store.selectedTrack();
+      if (t) targets = t.clips.filter((c) => at > c.start && at < c.start + c.length).map((c) => ({ track: t, clip: c }));
+    }
+    if (!targets.length) { toast('Put the playhead over a clip (or select one) to split it with Ctrl+S.'); return; }
+    let rightId = null;
+    store.mutate((p) => {
+      for (const { track, clip } of targets) {
+        const tr = p.tracks.find((x) => x.id === track.id);
+        const i = tr.clips.findIndex((c) => c.id === clip.id);
+        const parts = splitClip(tr.clips[i], at);
+        if (!parts) continue;
+        tr.clips.splice(i, 1, ...parts);
+        rightId = parts[1].id;
+      }
+    });
+    if (rightId) { store.ui.selectedClipId = rightId; timeline.updateSelection(); }
+    toast(`Split ${targets.length} clip${targets.length === 1 ? '' : 's'} at the playhead.`);
+  }
 
   function deleteClip() {
     const id = store.ui.selectedClipId;

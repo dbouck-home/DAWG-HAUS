@@ -1,7 +1,7 @@
 // Arrangement timeline: ruler, grid, lanes, clips, playhead and editing.
 import { PPQ, MeterMap } from '../timing.js';
 import { colorForTrack } from '../audio/presets.js';
-import { newClip } from '../project.js';
+import { newClip, patternLength, expandNotes, repeatCount } from '../project.js';
 import { h } from './dom.js';
 import { AUTO_H, laneData, drawLane, bindLaneRow } from './autolanes.js';
 
@@ -105,9 +105,20 @@ export class Timeline {
       'data-clip': clip.id,
       style: { left: `${x}px`, width: `${w}px`, background: `linear-gradient(${shade(color, 0.55)}, ${shade(color, 0.35)})` },
     },
-    h('div', { class: 'clip-name' }, clip.name || track.name),
+    h('div', { class: 'clip-name' }, clip.name || track.name, clip.loop && repeatCount(clip) > 1.01 ? h('span', { class: 'rep-count' }, ` ×${+repeatCount(clip).toFixed(2)}`) : null),
     h('div', { class: 'resize', 'data-resize': '1' }));
     if (track.type !== 'audio' && clip.notes.length) el.append(this.miniNotes(clip, w, color));
+    // repeat seams
+    const L = patternLength(clip);
+    if (clip.loop && clip.length > L) {
+      for (let x2 = L; x2 < clip.length - 1; x2 += L) el.append(h('div', { class: 'rep-seam', style: { left: `${this.tickToX(x2)}px` } }));
+    }
+    if (track.type !== 'audio') {
+      el.append(h('div', {
+        class: 'repeat', 'data-repeat': '1',
+        title: 'Repeat: click to play this section one more time, or drag to the right to repeat it as long as you like (Shift-click = repeat to the end of the song)',
+      }, '⟳'));
+    }
     return el;
   }
 
@@ -122,7 +133,7 @@ export class Timeline {
     const range = Math.max(8, hi - lo);
     const sx = cw / clip.length;
     g.fillStyle = shade(color, 1.35);
-    for (const n of clip.notes) {
+    for (const n of expandNotes(clip)) {
       if (n.t >= clip.length) continue;
       const y = H - ((n.p - lo) / range) * H;
       const nh = Math.max(2, H / range - 1);
@@ -354,6 +365,48 @@ export class Timeline {
     return -1;
   }
 
+  /** Drag the ⟳ handle to repeat a clip; a click adds one repeat; Shift-click fills to the song end. */
+  repeatDrag(e, clipEl, clip, track) {
+    e.stopPropagation();
+    const L = patternLength(clip);
+    const startX = e.clientX;
+    const origLen = clip.length;
+    let newLen = origLen;
+    let moved = false;
+    const el = e.target;
+    el.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      if (Math.abs(ev.clientX - startX) > 3) moved = true;
+      if (!moved) return;
+      const raw = origLen + this.xToTick(ev.clientX - startX);
+      // whole repeats only
+      newLen = Math.max(L, Math.round(raw / L) * L);
+      clipEl.style.width = `${this.tickToX(newLen)}px`;
+    };
+    const up = (ev) => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      if (!moved) {
+        if (ev.shiftKey) {
+          // repeat until the end of the song (last clip on any track, or at least 4 more repeats)
+          let end = 0;
+          for (const t of this.store.project.tracks) for (const c of t.clips) if (c.id !== clip.id) end = Math.max(end, c.start + c.length);
+          const reps = Math.max(Math.ceil((end - clip.start) / L), Math.ceil(origLen / L) + 4);
+          newLen = reps * L;
+        } else {
+          newLen = (Math.floor(origLen / L + 1e-6) + 1) * L;
+        }
+      }
+      if (newLen === origLen) { clipEl.style.width = `${this.tickToX(origLen)}px`; return; }
+      this.store.mutate((p) => {
+        const c = p.tracks.find((t) => t.id === track.id)?.clips.find((x) => x.id === clip.id);
+        if (c) { c.loop = L; c.length = newLen; }
+      });
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  }
+
   bindLanes() {
     this.rows.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
@@ -375,6 +428,7 @@ export class Timeline {
       this.rows.querySelectorAll('.lane').forEach((l) => l.classList.toggle('selected', l.dataset.track === track.id));
       this.store.emit('selection');
 
+      if (e.target.dataset.repeat) { this.repeatDrag(e, clipEl, clip, track); return; }
       const resizing = !!e.target.dataset.resize;
       const startX = e.clientX;
       const m = this.meter;

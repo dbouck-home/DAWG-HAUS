@@ -343,17 +343,27 @@ export class Engine {
         if (cEnd <= from || c.start >= to) continue;
         const swing = c.swing ? (c.swing / 100) * ((c.swingGrid || 240) / 3) : 0;
         const sg = c.swingGrid || 240;
-        for (const n of c.notes) {
-          let on = c.start + n.t;
-          if (swing) {
-            // delay every second grid step (shuffle feel)
-            const step = Math.round(n.t / sg);
-            if (step % 2 === 1 && Math.abs(n.t - step * sg) < sg * 0.25) on += swing;
+        // repeating clips play their pattern again every `loop` ticks
+        const L = c.loop && c.loop > 0 ? c.loop : c.length;
+        const kFrom = Math.max(0, Math.floor((from - c.start - L) / L));
+        const kTo = Math.floor((to - c.start) / L);
+        for (let k = kFrom; k <= kTo; k++) {
+          const base = c.start + k * L;
+          if (base >= cEnd) break;
+          const repEnd = Math.min(base + L, cEnd);
+          for (const n of c.notes) {
+            if (n.t >= L) continue;
+            let on = base + n.t;
+            if (swing) {
+              // delay every second grid step (shuffle feel)
+              const step = Math.round(n.t / sg);
+              if (step % 2 === 1 && Math.abs(n.t - step * sg) < sg * 0.25) on += swing;
+            }
+            if (on < from || on >= to || on >= repEnd) continue;
+            const off = Math.min(on + n.d, repEnd, cutTick);
+            ch.instrument.noteOn(n.p, n.v, time(on));
+            ch.instrument.noteOff(n.p, time(Math.max(on + 1, off)));
           }
-          if (on < from || on >= to || on >= cEnd) continue;
-          const off = Math.min(on + n.d, cEnd, cutTick);
-          ch.instrument.noteOn(n.p, n.v, time(on));
-          ch.instrument.noteOff(n.p, time(Math.max(on + 1, off)));
         }
       }
     }

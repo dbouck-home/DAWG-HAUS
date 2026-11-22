@@ -21,6 +21,12 @@ Opening `index.html` directly from disk will **not** work, because browsers bloc
 Upload the changed files, then raise `VERSION` in `sw.js` (for example `dawghaus-v0.2.1`).
 Installed copies pick up the update the next time they're opened.
 
+## Recent improvements
+
+- ⟳ Repeat button on every MIDI and drum clip: click to play the section one more time, drag it right to repeat as long as you like, or Shift-click to repeat to the end of the song. Editing the clip changes every repeat.
+- Ctrl+S splits clips at the playhead (the selected clip, or every clip under the playhead on the selected track). Songs still save automatically.
+- Piano roll: double-click to add a note; drag empty space to select notes
+
 ## New in Phase 4
 
 - Effects on every track and on the master: EQ, Compressor, Distortion (overdrive, distortion, fuzz, bit crush), Filter (with tempo-synced wobble), Chorus, Phaser, Delay (tempo-synced, ping-pong), Reverb, and Tremolo / Auto-pan
@@ -58,7 +64,7 @@ Installed copies pick up the update the next time they're opened.
 - Bottom panel with Piano Roll, Instrument, Mixer and Keyboard tabs; drag its top edge to resize it
 
 ### Piano roll shortcuts
-Click empty grid: add a note (drag to set its length) · Shift+drag: box-select · double-click or right-click a note: delete ·
+Double-click empty grid: add a note · drag empty grid: box-select (Shift adds) · double-click or right-click a note: delete ·
 drag a note's right edge: resize · Alt while dragging: ignore the grid · ↑/↓: transpose (Shift = octave) · ←/→: nudge by the grid ·
 Ctrl+A/C/V/D: select all / copy / paste / duplicate · Q: quantize · Del: delete selected notes
 
