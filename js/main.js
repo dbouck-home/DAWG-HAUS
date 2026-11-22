@@ -8,6 +8,7 @@ import { PianoRoll } from './ui/pianoroll.js';
 import { Dock, InstrumentPanel, OnscreenKeyboard } from './ui/dock.js';
 import { BeatEditor } from './ui/drumeditor.js';
 import { FxPanel } from './ui/fxpanel.js';
+import { renderSong, encodeWav, encodeMp3, normalize, download, songEndTick } from './export.js';
 import { KITS, getKit } from './audio/drums.js';
 import { demoProject, newProject, newTrack, newClip, migrateProject, splitClip } from './project.js';
 import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject, importEmbeddedAudio, saveAudio } from './storage.js';
@@ -353,6 +354,73 @@ async function boot() {
         h('small', {}, 'vocals & mics · recording in Phase 5'))),
       h('div', { class: 'hint', style: { marginTop: '10px' } }, ''));
     closeFn = openModal({ title: 'Add a track', body, buttons: [{ label: 'Cancel' }], width: '720px' });
+  };
+
+  // ---------- export ----------
+  $('btn-export').onclick = () => {
+    const p = store.project;
+    const hasLoop = p.loop.end > p.loop.start;
+    const fmtSel = h('select', {},
+      h('option', { value: 'mp3-320' }, 'MP3 · 320 kbps (best quality)'),
+      h('option', { value: 'mp3-192', selected: true }, 'MP3 · 192 kbps (smaller file)'),
+      h('option', { value: 'mp3-128' }, 'MP3 · 128 kbps (smallest)'),
+      h('option', { value: 'wav-16' }, 'WAV · 16-bit (CD quality, large)'),
+      h('option', { value: 'wav-24' }, 'WAV · 24-bit (studio, largest)'));
+    const rangeSel = h('select', {},
+      h('option', { value: 'song' }, 'Whole song'),
+      hasLoop ? h('option', { value: 'loop' }, 'Loop region only') : null);
+    const srSel = h('select', {}, h('option', { value: '44100', selected: true }, '44.1 kHz'), h('option', { value: '48000' }, '48 kHz'));
+    const tailIn = h('input', { type: 'number', min: 0, max: 15, step: 0.5, value: 2 });
+    const normChk = h('input', { type: 'checkbox', checked: true });
+    const nameIn = h('input', { type: 'text', value: (p.name || 'song').replace(/[^\w\- ]+/g, '').trim() || 'song' });
+    const bar = h('div', { class: 'xbar' }, h('i'));
+    const status = h('div', { class: 'hint' }, `Renders every track with its instruments, effects, automation and tempo changes. Length: ${formatTime(new TempoMap(p.tempos).tickToSec(songEndTick(p)))}.`);
+    let busy = false;
+    openModal({
+      title: 'Export song',
+      body: h('div', {},
+        h('label', { class: 'row' }, h('span', {}, 'File name'), nameIn),
+        h('label', { class: 'row' }, h('span', {}, 'Format'), fmtSel),
+        h('label', { class: 'row' }, h('span', {}, 'What to export'), rangeSel),
+        h('label', { class: 'row' }, h('span', {}, 'Sample rate'), srSel),
+        h('label', { class: 'row' }, h('span', {}, 'Ending tail (s)'), tailIn),
+        h('label', { class: 'row' }, h('span', {}, 'Normalize'), h('span', { class: 'chk' }, normChk, ' make it as loud as possible without clipping')),
+        bar, status),
+      buttons: [
+        { label: 'Close' },
+        {
+          label: 'Export', kind: 'primary',
+          onClick: () => {
+            if (busy) return false;
+            busy = true;
+            const [kind, q] = fmtSel.value.split('-');
+            const setP = (f, msg) => { bar.firstChild.style.width = `${Math.round(f * 100)}%`; status.textContent = msg; };
+            (async () => {
+              try {
+                engine.stop();
+                setP(0, 'Rendering the song…');
+                const buf = await renderSong(store.project, engine, {
+                  range: rangeSel.value, sampleRate: +srSel.value, tail: Math.max(0, +tailIn.value || 0),
+                  onProgress: (f) => setP(kind === 'mp3' ? f * 0.6 : f * 0.95, `Rendering… ${Math.round(f * 100)}%`),
+                });
+                if (normChk.checked) normalize(buf);
+                let blob;
+                if (kind === 'wav') { setP(0.97, 'Writing the WAV file…'); blob = encodeWav(buf, +q); }
+                else blob = await encodeMp3(buf, +q, (f) => setP(0.6 + f * 0.4, `Encoding MP3… ${Math.round(f * 100)}%`));
+                const fname = `${nameIn.value.trim() || 'song'}.${kind}`;
+                download(blob, fname);
+                setP(1, `Done — saved ${fname} (${(blob.size / 1048576).toFixed(1)} MB, ${formatTime(buf.duration)}). Check your Downloads folder.`);
+              } catch (e) {
+                console.error(e);
+                setP(0, `Export failed: ${e.message}`);
+              }
+              busy = false;
+            })();
+            return false;
+          },
+        },
+      ],
+    });
   };
 
   // ---------- songs (projects) ----------

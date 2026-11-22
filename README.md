@@ -1,4 +1,4 @@
-# DAWG HAUS — Phase 6
+# DAWG HAUS — Phase 7
 
 A browser-based digital audio workstation (PWA) for Windows 11 and Chromebooks.
 Plain HTML/CSS/JavaScript with no build step: upload the folder to any static host and it runs.
@@ -20,6 +20,12 @@ Opening `index.html` directly from disk will **not** work, because browsers bloc
 
 Upload the changed files, then raise `VERSION` in `sw.js` (for example `dawghaus-v0.2.1`).
 Installed copies pick up the update the next time they're opened.
+
+## New in Phase 7
+
+- ⤓ Export (top bar): MP3 (320 / 192 / 128 kbps) or WAV (16-bit or 24-bit), whole song or just the loop region, 44.1 or 48 kHz, an adjustable ending tail for reverb and delay, and optional normalizing to −1 dB
+- Renders faster than real time with every instrument, drum kit, sampler, recording, effect, automation lane and tempo change; muted tracks stay out
+- MP3 encoding uses LAME (vendor/lame.min.js, LGPL — see vendor/LAME-LICENSE.txt) in a background worker
 
 ## New in Phase 6
 
@@ -127,6 +133,10 @@ js/audio/effects.js         insert effects
 js/automation.js            automation targets + lane math
 js/ui/fxpanel.js            Effects tab
 js/ui/autolanes.js          automation + tempo lanes in the timeline
+js/audio/worklets.js        recorder + autotune (AudioWorklet)
+js/audio/sampleinst.js      sampler instrument, auto-trim, pitch detection
+js/export.js, js/mp3worker.js  offline render, WAV/MP3 encoding
+vendor/lame.min.js          LAME MP3 encoder (LGPL)
 samples/                    instrument samples (see samples/CREDITS.txt)
 js/ui/*.js                  timeline, track headers, mixer, modal helpers
 sw.js, manifest.webmanifest PWA (offline + install)
@@ -134,4 +144,4 @@ sw.js, manifest.webmanifest PWA (offline + install)
 
 ## Next phases
 
-7. WAV/MP3 export
+All seven planned phases are done.

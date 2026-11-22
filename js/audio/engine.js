@@ -137,31 +137,36 @@ export class Engine {
   ensureContext() {
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new AC({ latencyHint: 'interactive' });
-      this.master = this.ctx.createGain();
-      this.limiter = this.ctx.createDynamicsCompressor();
-      this.limiter.threshold.value = -1;
-      this.limiter.knee.value = 0;
-      this.limiter.ratio.value = 20;
-      this.limiter.attack.value = 0.002;
-      this.limiter.release.value = 0.1;
-      this.masterAnalyser = this.ctx.createAnalyser();
-      this.masterAnalyser.fftSize = 512;
-      this.masterBuf = new Float32Array(512);
-      this.masterFx = new FxChain(this.ctx, this.master, this.limiter);
-      this.limiter.connect(this.masterAnalyser).connect(this.ctx.destination);
-      this.clickGain = this.ctx.createGain();
-      this.clickGain.connect(this.ctx.destination);
-      this.workletsReady = loadWorklets(this.ctx).then(() => {
-        // effects created before the worklets loaded (autotune) get rebuilt now
-        for (const ch of this.channels.values()) ch.fx.rebuildPending();
-        this.masterFx.rebuildPending();
-        this.sync();
-      }).catch((e) => console.warn('Audio worklets failed to load', e));
-      this.sync();
+      this.setupContext(new AC({ latencyHint: 'interactive' }));
     }
-    if (this.ctx.state === 'suspended') this.ctx.resume();
+    if (this.ctx.state === 'suspended' && this.ctx.resume) this.ctx.resume();
     return this.ctx;
+  }
+
+  /** Build the master bus on a context (a live AudioContext, or an OfflineAudioContext for export). */
+  setupContext(ctx) {
+    this.ctx = ctx;
+    this.master = ctx.createGain();
+    this.limiter = ctx.createDynamicsCompressor();
+    this.limiter.threshold.value = -1;
+    this.limiter.knee.value = 0;
+    this.limiter.ratio.value = 20;
+    this.limiter.attack.value = 0.002;
+    this.limiter.release.value = 0.1;
+    this.masterAnalyser = ctx.createAnalyser();
+    this.masterAnalyser.fftSize = 512;
+    this.masterBuf = new Float32Array(512);
+    this.masterFx = new FxChain(ctx, this.master, this.limiter);
+    this.limiter.connect(this.masterAnalyser).connect(ctx.destination);
+    this.clickGain = ctx.createGain();
+    this.clickGain.connect(ctx.destination);
+    this.workletsReady = loadWorklets(ctx).then(() => {
+      // effects created before the worklets loaded (autotune) get rebuilt now
+      for (const ch of this.channels.values()) ch.fx.rebuildPending();
+      this.masterFx.rebuildPending();
+      this.sync();
+    }).catch((e) => console.warn('Audio worklets failed to load', e));
+    this.sync();
   }
 
   get latency() {

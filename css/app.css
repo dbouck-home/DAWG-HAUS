@@ -387,3 +387,6 @@ button { cursor: pointer; }
 .pbtn:disabled { opacity: .4; cursor: default; }
 .smp-name { background: #0b0d10; border: 1px solid var(--line2); border-radius: 6px; padding: 3px 8px; width: 180px; }
 .th .smp-btn { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.xbar { height: 8px; background: #0b0d10; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.xbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
