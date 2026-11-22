@@ -1,5 +1,5 @@
 // Arrangement timeline: ruler, grid, lanes, clips, playhead and editing.
-import { PPQ, MeterMap } from '../timing.js';
+import { PPQ, MeterMap, TempoMap } from '../timing.js';
 import { colorForTrack } from '../audio/presets.js';
 import { newClip, patternLength, expandNotes, repeatCount } from '../project.js';
 import { h, popupMenu } from './dom.js';
@@ -109,6 +109,7 @@ export class Timeline {
     h('div', { class: 'clip-name' }, clip.name || track.name, clip.loop && repeatCount(clip) > 1.01 ? h('span', { class: 'rep-count' }, ` ×${+repeatCount(clip).toFixed(2)}`) : null),
     h('div', { class: 'resize', 'data-resize': '1' }));
     if (track.type !== 'audio' && clip.notes.length) el.append(this.miniNotes(clip, w, color));
+    if (clip.audioId) el.append(this.waveform(clip, w, color));
     // repeat seams
     const L = patternLength(clip);
     if (clip.loop && clip.length > L) {
@@ -121,6 +122,36 @@ export class Timeline {
       }, '⟳'));
     }
     return el;
+  }
+
+  waveform(clip, w, color) {
+    const H = this.laneH - 8 - 2 - 16 - 4;
+    const cw = Math.max(1, Math.floor(Math.min(w, 4000)));
+    const c = h('canvas', { width: cw, height: H, style: { width: `${w}px`, height: `${H}px` } });
+    const pk = this.engine.peaks(clip.audioId, 128);
+    if (!pk) return c; // drawn once the recording has loaded
+    const g = c.getContext('2d');
+    const tempo = new TempoMap(this.store.project.tempos);
+    const secStart = tempo.tickToSec(clip.start);
+    const secLen = tempo.tickToSec(clip.start + clip.length) - secStart;
+    const off = clip.srcOffset || 0;
+    const n = pk.data.length / 2;
+    g.fillStyle = shade(color, 1.4);
+    const mid = H / 2;
+    const gainMul = Math.pow(10, (clip.gain || 0) / 20);
+    for (let x = 0; x < cw; x++) {
+      const s0 = off + (x / cw) * secLen;
+      const s1 = off + ((x + 1) / cw) * secLen;
+      const i0 = Math.floor((s0 * pk.sampleRate) / pk.per);
+      const i1 = Math.max(i0 + 1, Math.ceil((s1 * pk.sampleRate) / pk.per));
+      if (i0 >= n) break;
+      let lo = 0; let hi = 0;
+      for (let i = i0; i < Math.min(i1, n); i++) { lo = Math.min(lo, pk.data[i * 2]); hi = Math.max(hi, pk.data[i * 2 + 1]); }
+      const y1 = mid - Math.min(1, hi * gainMul) * mid;
+      const y2 = mid - Math.max(-1, lo * gainMul) * mid;
+      g.fillRect(x, y1, 1, Math.max(1, y2 - y1));
+    }
+    return c;
   }
 
   miniNotes(clip, w, color) {

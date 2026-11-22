@@ -7,9 +7,19 @@ import { Sampler } from './sampler.js';
 import { DrumKit } from './drums.js';
 import { createFx, updateFx } from './effects.js';
 import { valueAt, activeLane } from '../automation.js';
+import { loadAudio } from '../storage.js';
 
 const LOOKAHEAD = 0.12; // seconds scheduled ahead
 const INTERVAL = 25; // ms between scheduler runs
+
+/** Load the AudioWorklet processors (recorder, autotune) into a context once. */
+export function loadWorklets(ctx) {
+  if (!ctx.__dawgWorkletsLoading) {
+    ctx.__dawgWorkletsLoading = ctx.audioWorklet.addModule(new URL('./worklets.js', import.meta.url))
+      .then(() => { ctx.__dawgWorklets = true; });
+  }
+  return ctx.__dawgWorkletsLoading;
+}
 
 export const dbToGain = (db) => (db <= -60 ? 0 : Math.pow(10, db / 20));
 
@@ -45,6 +55,13 @@ class FxChain {
       node.connect(this.to);
     }
     for (const f of list) { const inst = this.insts.get(f.id); if (inst) updateFx(inst, f); }
+  }
+
+  /** Recreate effects that were only placeholders (worklet not loaded yet). */
+  rebuildPending() {
+    for (const [id, inst] of this.insts) {
+      if (inst.pending) { try { inst.output.disconnect(); } catch { /* ignore */ } this.insts.delete(id); this.key = null; }
+    }
   }
 
   tempo(bpm, at) {
@@ -104,6 +121,12 @@ export class Engine {
     this.recordTrackId = null;
     this.recorded = [];
     this.openRec = new Map();
+    this.sources = new Set();
+    this.audioBuffers = new Map();
+    this.audioLoading = new Map();
+    this.peakCache = new Map();
+    this.input = null;
+    this.audioRec = null;
   }
 
   on(ev, fn) { (this.listeners[ev] ||= []).push(fn); }
@@ -128,6 +151,12 @@ export class Engine {
       this.limiter.connect(this.masterAnalyser).connect(this.ctx.destination);
       this.clickGain = this.ctx.createGain();
       this.clickGain.connect(this.ctx.destination);
+      this.workletsReady = loadWorklets(this.ctx).then(() => {
+        // effects created before the worklets loaded (autotune) get rebuilt now
+        for (const ch of this.channels.values()) ch.fx.rebuildPending();
+        this.masterFx.rebuildPending();
+        this.sync();
+      }).catch((e) => console.warn('Audio worklets failed to load', e));
       this.sync();
     }
     if (this.ctx.state === 'suspended') this.ctx.resume();
@@ -262,6 +291,7 @@ export class Engine {
   }
 
   stop() {
+    if (this.audioRec) this.stopAudioRecording();
     if (this.countGain) { try { this.countGain.disconnect(); } catch { /* ignore */ } this.countGain = null; }
     this.countIn = null;
     if (!this.playing) { this.positionTick = 0; this.emit('transport'); return; }
@@ -270,6 +300,7 @@ export class Engine {
     this.playing = false;
     clearInterval(this.timer);
     for (const ch of this.channels.values()) ch.instrument?.allNotesOff();
+    this.stopSources();
     this.positionTick = Math.max(0, Math.round(t));
     this.releaseAutomation();
     this.emit('transport');
@@ -307,12 +338,14 @@ export class Engine {
   }
 
   setPosition(tick) {
+    if (this.audioRec) this.stopAudioRecording();
     const wasPlaying = this.playing;
     if (wasPlaying) {
       this.finishRecording(this.currentTick());
       this.playing = false;
       clearInterval(this.timer);
       for (const ch of this.channels.values()) ch.instrument?.allNotesOff();
+      this.stopSources();
       this.releaseAutomation();
     }
     this.positionTick = Math.max(0, Math.round(tick));
@@ -333,7 +366,8 @@ export class Engine {
     const { meter, tempo, p } = this.maps();
     const targetTime = this.ctx.currentTime + LOOKAHEAD;
     const loop = p.loop;
-    const looping = loop.enabled && loop.end > loop.start;
+    // no looping while recording audio (a take is one continuous recording)
+    const looping = loop.enabled && loop.end > loop.start && !this.audioRec;
     const songEnd = meter.barToTick(p.lengthBars);
     for (let guard = 0; guard < 8; guard++) {
       const anchor = this.anchors[this.anchors.length - 1];
@@ -358,8 +392,9 @@ export class Engine {
 
   scheduleRange(from, to, anchor, meter, tempo, p, cutTick) {
     const time = (tick) => this.timeOfTick(tick, anchor, tempo);
+    const fresh = this.autoFresh;
     for (const t of p.tracks) {
-      if (t.type === 'audio') continue;
+      if (t.type === 'audio') { this.scheduleAudio(t, from, to, time, tempo, cutTick, fresh); continue; }
       const ch = this.channels.get(t.id);
       if (!ch?.instrument) continue;
       for (const c of t.clips) {
@@ -395,6 +430,212 @@ export class Engine {
       for (const b of meter.beatsBetween(from, to)) this.click(time(b.tick), b.accent);
     }
     this.scheduleAutomation(from, to, time, tempo, p);
+  }
+
+  /** Start the recorded-audio clips that begin in this window (or that we start in the middle of). */
+  scheduleAudio(t, from, to, time, tempo, cutTick, fresh) {
+    const ch = this.channels.get(t.id);
+    if (!ch) return;
+    for (const c of t.clips) {
+      if (!c.audioId) continue;
+      const cEnd = c.start + c.length;
+      let startTick;
+      if (c.start >= from && c.start < to) startTick = c.start;
+      else if (fresh && c.start < from && cEnd > from) startTick = from; // playback starts inside the clip
+      else continue;
+      const buf = this.audioBuffers.get(c.audioId);
+      if (!buf) { this.loadAudioBuffer(c.audioId); continue; }
+      const endTick = Math.min(cEnd, cutTick);
+      if (endTick <= startTick) continue;
+      const when = time(startTick);
+      const offset = (c.srcOffset || 0) + (tempo.tickToSec(startTick) - tempo.tickToSec(c.start));
+      const dur = time(endTick) - when;
+      if (offset >= buf.duration || dur <= 0) continue;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const g = this.ctx.createGain();
+      g.gain.value = dbToGain(c.gain || 0);
+      // tiny fades avoid clicks at the clip edges
+      const now = Math.max(when, this.ctx.currentTime);
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(dbToGain(c.gain || 0), now + 0.004);
+      g.gain.setValueAtTime(dbToGain(c.gain || 0), now + Math.max(0.005, dur - 0.006));
+      g.gain.linearRampToValueAtTime(0, now + dur);
+      src.connect(g).connect(ch.input);
+      src.start(now, offset + (now - when), Math.max(0, dur - (now - when)));
+      this.sources.add(src);
+      src.onended = () => { this.sources.delete(src); try { g.disconnect(); } catch { /* ignore */ } };
+    }
+  }
+
+  stopSources() {
+    for (const s of this.sources) { try { s.stop(); } catch { /* ignore */ } }
+    this.sources.clear();
+  }
+
+  /** Load a recording from storage into an AudioBuffer (cached). */
+  loadAudioBuffer(id) {
+    if (!this.ctx || this.audioLoading.has(id)) return this.audioLoading.get(id);
+    const p = (async () => {
+      const rec = await loadAudio(id);
+      if (!rec) return null;
+      const buf = this.ctx.createBuffer(1, rec.data.length, rec.sampleRate);
+      buf.copyToChannel(rec.data, 0);
+      this.audioBuffers.set(id, buf);
+      this.emit('audio-loaded', id);
+      return buf;
+    })();
+    this.audioLoading.set(id, p);
+    return p;
+  }
+
+  /** Min/max pairs for drawing a waveform (one pair per `per` samples). */
+  peaks(id, per = 256) {
+    const key = `${id}:${per}`;
+    if (this.peakCache.has(key)) return this.peakCache.get(key);
+    const buf = this.audioBuffers.get(id);
+    if (!buf) { this.loadAudioBuffer(id); return null; }
+    const d = buf.getChannelData(0);
+    const n = Math.ceil(d.length / per);
+    const out = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      let lo = 0; let hi = 0;
+      for (let j = i * per, e = Math.min(d.length, j + per); j < e; j++) { const v = d[j]; if (v < lo) lo = v; if (v > hi) hi = v; }
+      out[i * 2] = lo; out[i * 2 + 1] = hi;
+    }
+    const res = { data: out, per, sampleRate: buf.sampleRate };
+    this.peakCache.set(key, res);
+    return res;
+  }
+
+  // ---------- microphone input, monitoring and audio recording ----------
+
+  /** Open (or switch) the microphone. Returns the device label. */
+  async openInput(deviceId) {
+    this.ensureContext();
+    await this.workletsReady;
+    if (this.input && this.input.deviceId === (deviceId || '') && this.input.stream.active) return this.input.label;
+    this.closeInput();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: deviceId ? { exact: deviceId } : undefined,
+        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+        latency: 0,
+      },
+    });
+    const ctx = this.ctx;
+    const src = ctx.createMediaStreamSource(stream);
+    const gain = ctx.createGain();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    const recorder = new AudioWorkletNode(ctx, 'dawg-recorder', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+    const monitor = ctx.createGain();
+    monitor.gain.value = 0;
+    const sink = ctx.createGain();
+    sink.gain.value = 0;
+    src.connect(gain).connect(analyser);
+    gain.connect(recorder);
+    recorder.connect(sink).connect(ctx.destination); // keeps the recorder running
+    recorder.connect(monitor);
+    const track = stream.getAudioTracks()[0];
+    const settings = track.getSettings?.() || {};
+    this.input = {
+      stream, src, gain, analyser, recorder, monitor, sink, deviceId: deviceId || '',
+      label: track.label || 'Microphone', latency: settings.latency || 0.01, buf: new Float32Array(1024), monitorTo: null,
+    };
+    recorder.port.onmessage = (e) => this.onRecorderMessage(e.data);
+    this.syncInput();
+    return this.input.label;
+  }
+
+  closeInput() {
+    if (!this.input) return;
+    try { this.input.stream.getTracks().forEach((tr) => tr.stop()); this.input.src.disconnect(); this.input.recorder.disconnect(); } catch { /* ignore */ }
+    this.input = null;
+  }
+
+  inputPeak() {
+    if (!this.input) return 0;
+    this.input.analyser.getFloatTimeDomainData(this.input.buf);
+    let m = 0;
+    for (const v of this.input.buf) { const a = Math.abs(v); if (a > m) m = a; }
+    return m;
+  }
+
+  /** Route the mic to the selected audio track when monitoring is on; apply input gain. */
+  syncInput(selectedTrackId = this.monitorTrackId) {
+    this.monitorTrackId = selectedTrackId;
+    const inp = this.input;
+    if (!inp) return;
+    const p = this.getProject();
+    const t = p.tracks.find((x) => x.id === selectedTrackId && x.type === 'audio');
+    inp.gain.gain.setTargetAtTime(dbToGain(t?.input?.gain ?? 0), this.ctx.currentTime, 0.02);
+    const target = t && t.input?.monitor ? this.channels.get(t.id)?.input : null;
+    if (inp.monitorTo !== target) {
+      try { inp.monitor.disconnect(); } catch { /* ignore */ }
+      if (target) inp.monitor.connect(target);
+      inp.monitorTo = target;
+    }
+    inp.monitor.gain.setTargetAtTime(target ? 1 : 0, this.ctx.currentTime, 0.02);
+  }
+
+  /** Seconds between a sound being played and the same moment arriving back through the mic. */
+  get recordLatency() {
+    const extra = (+localStorage.getItem('dawg:latencyMs') || 0) / 1000;
+    return this.latency + (this.input?.latency || 0) + extra;
+  }
+
+  /** Tick that plays at a given AudioContext time. */
+  tickAtTime(time) {
+    const { tempo } = this.maps();
+    let a = this.anchors[0];
+    for (const x of this.anchors) { if (x.time <= time) a = x; else break; }
+    return Math.max(0, tempo.secToTick(tempo.tickToSec(a.tick) + (time - a.time)));
+  }
+
+  startAudioRecording(trackId) {
+    if (!this.input || !this.playing) return false;
+    const startTime = Math.max(this.anchors[0].time, this.ctx.currentTime + 0.02);
+    this.audioRec = { trackId, startTime, startTick: Math.round(this.tickAtTime(startTime)), chunks: [], t0: null, sampleRate: this.ctx.sampleRate };
+    this.input.recorder.port.postMessage({ cmd: 'start' });
+    this.recording = true;
+    this.recordTrackId = trackId;
+    this.emit('transport');
+    return true;
+  }
+
+  onRecorderMessage(m) {
+    const r = this.audioRec;
+    if (!r) return;
+    if (m.type === 'started') r.t0 = m.time;
+    else if (m.type === 'data') r.chunks.push(m.data);
+    else if (m.type === 'stopped') this.finishAudioRecording();
+  }
+
+  stopAudioRecording() {
+    if (!this.audioRec || this.audioRec.stopping) return;
+    this.audioRec.stopping = true;
+    this.audioRec.endTime = this.ctx.currentTime;
+    this.input?.recorder.port.postMessage({ cmd: 'stop' });
+  }
+
+  finishAudioRecording() {
+    const r = this.audioRec;
+    this.audioRec = null;
+    this.recording = false;
+    this.emit('transport');
+    if (!r || r.t0 == null) return;
+    let total = 0;
+    for (const c of r.chunks) total += c.length;
+    const all = new Float32Array(total);
+    let o = 0;
+    for (const c of r.chunks) { all.set(c, o); o += c.length; }
+    // skip what came in before the take started, plus the round-trip latency
+    const skip = Math.max(0, Math.round((r.startTime - r.t0 + this.recordLatency) * r.sampleRate));
+    const wanted = Math.max(0, Math.round((r.endTime - r.startTime) * r.sampleRate));
+    const data = all.slice(skip, skip + wanted);
+    if (data.length < r.sampleRate * 0.05) return; // too short to keep
+    this.emit('audio-recorded', { trackId: r.trackId, startTick: r.startTick, data, sampleRate: r.sampleRate });
   }
 
   scheduleAutomation(from, to, time, tempo, p) {

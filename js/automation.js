@@ -13,6 +13,7 @@ export const AUTO_KEYS = {
   delay: ['feedback', 'tone', 'mix'],
   reverb: ['mix'],
   tremolo: [],
+  autotune: ['amount', 'mix'],
 };
 
 export const TEMPO_TARGET = { key: 'tempo', label: 'Tempo', min: 30, max: 240, unit: 'BPM', def: 120 };

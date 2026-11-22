@@ -102,7 +102,12 @@ export class TrackHeaders {
             class: 'kit', title: 'Drum kit', onpointerdown: (e) => e.stopPropagation(),
             onchange: (e) => this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).drums = { kit: e.target.value, pads: {} }; }),
           }, KITS.map((k) => h('option', { value: k.id, selected: k.id === t.drums.kit }, k.name)))
-          : h('span', { class: 'type-tag' }, 'Audio track · recording arrives in Phase 5');
+          : h('span', { class: 'type-tag' },
+            h('button', {
+              class: `sb mon ${t.input?.monitor ? 'active' : ''}`, title: 'Monitoring: hear yourself through this track (use headphones)',
+              onclick: (e) => { e.stopPropagation(); this.store.mutate((p) => { const x = p.tracks.find((y) => y.id === t.id); x.input = { ...(x.input || {}), monitor: !x.input?.monitor }; }); },
+            }, '🎧'),
+            ` 🎙 ${t.clips.length ? `${t.clips.length} take${t.clips.length === 1 ? '' : 's'}` : 'select + R to record'}`);
       const el = h('div', {
         class: `th ${selected ? 'selected' : ''}`,
         'data-track': t.id,

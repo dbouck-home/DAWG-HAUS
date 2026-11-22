@@ -167,9 +167,15 @@ export function expandNotes(clip) {
  * Split a clip at song tick `at`. Returns [left, right] (new objects) or null if `at` isn't inside it.
  * Repeats are written out so both halves sound exactly like before.
  */
-export function splitClip(clip, at) {
+export function splitClip(clip, at, secAt) {
   const rel = Math.round(at - clip.start);
   if (rel <= 0 || rel >= clip.length) return null;
+  if (clip.audioId) {
+    // recorded audio: the right half starts later in the same recording
+    const left = { ...clip, id: uid('clp'), length: rel };
+    const right = { ...clip, id: uid('clp'), start: clip.start + rel, length: clip.length - rel, srcOffset: (clip.srcOffset || 0) + (secAt ? secAt(at) - secAt(clip.start) : 0) };
+    return [left, right];
+  }
   const notes = expandNotes(clip);
   const base = { ...clip };
   delete base.loop;

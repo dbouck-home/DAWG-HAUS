@@ -81,7 +81,49 @@ function impulse(ctx, seconds, damping, predelay) {
 
 // ---------------- effect definitions ----------------
 
+const KEY_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+export const SCALE_OPTIONS = [
+  ['chromatic', 'Chromatic (every note)'], ['major', 'Major'], ['minor', 'Minor'], ['harmonicMinor', 'Harmonic minor'],
+  ['majorPentatonic', 'Major pentatonic'], ['minorPentatonic', 'Minor pentatonic'], ['blues', 'Blues'], ['dorian', 'Dorian'], ['mixolydian', 'Mixolydian'],
+];
+
 export const FX_TYPES = {
+  autotune: {
+    name: 'Autotune',
+    params: [
+      { key: 'key', label: 'Key', type: 'select', options: KEY_NAMES.map((n, i) => [String(i), n]), def: '0' },
+      { key: 'scale', label: 'Scale', type: 'select', options: SCALE_OPTIONS, def: 'major' },
+      { key: 'speed', label: 'Retune speed', min: 0, max: 400, step: 1, def: 20, unit: 'ms' },
+      { key: 'amount', label: 'Amount', min: 0, max: 1, step: 0.01, def: 1 },
+      { key: 'mix', label: 'Mix', min: 0, max: 1, step: 0.01, def: 1 },
+    ],
+    create(ctx) {
+      // needs the worklet module; until it's loaded, pass audio straight through
+      if (!ctx.__dawgWorklets) {
+        const g = ctx.createGain();
+        return { input: g, output: g, pending: true, set() {}, automatable: () => null };
+      }
+      const node = new AudioWorkletNode(ctx, 'dawg-autotune', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+      const p = (k) => node.parameters.get(k);
+      return {
+        input: node, output: node,
+        set(k, v) {
+          const t = ctx.currentTime;
+          if (k === 'key') node.port.postMessage({ key: +v });
+          if (k === 'scale') node.port.postMessage({ scale: v });
+          if (k === 'speed') p('speed').setValueAtTime(v / 1000, t);
+          if (k === 'amount') p('amount').setValueAtTime(v, t);
+          if (k === 'mix') p('mix').setValueAtTime(v, t);
+        },
+        automatable: (k) => ({
+          amount: { param: p('amount'), map: (v) => v },
+          mix: { param: p('mix'), map: (v) => v },
+        })[k] || null,
+        dispose() { node.disconnect(); },
+      };
+    },
+  },
+
   eq: {
     name: 'EQ',
     params: [
@@ -450,7 +492,7 @@ export const FX_TYPES = {
   },
 };
 
-export const FX_ORDER = ['eq', 'compressor', 'distortion', 'filter', 'chorus', 'phaser', 'delay', 'reverb', 'tremolo'];
+export const FX_ORDER = ['autotune', 'eq', 'compressor', 'distortion', 'filter', 'chorus', 'phaser', 'delay', 'reverb', 'tremolo'];
 
 export function fxDefaults(type) {
   const out = {};

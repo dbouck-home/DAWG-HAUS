@@ -98,6 +98,7 @@ export class InstrumentPanel {
     const t = this.store.selectedTrack();
     this.root.innerHTML = '';
     if (t?.type === 'drums') { this.renderDrums(t); return; }
+    if (t?.type === 'audio') { this.renderAudio(t); return; }
     if (!t || t.type !== 'instrument') {
       this.root.append(h('div', { class: 'pane-empty' }, t ? 'Audio tracks get their settings in Phase 5.' : 'Select an instrument track.'));
       return;
@@ -166,6 +167,83 @@ export class InstrumentPanel {
         h('div', { class: 'hint' }, 'Chorus, delay, distortion, reverb and the other effects come in Phase 4 as per-track effects with automation.'))));
   }
 }
+
+InstrumentPanel.prototype.renderAudio = function renderAudio(t) {
+  const eng = this.engine;
+  const inp = t.input || {};
+  const setInput = (patch, opts) => this.store.mutate((pp) => {
+    const x = pp.tracks.find((y) => y.id === t.id);
+    x.input = { ...(x.input || {}), ...patch };
+  }, opts);
+  const left = h('div', { class: 'inst-right' });
+  if (!eng.input) {
+    left.append(
+      h('div', { class: 'hint' }, 'To record vocals or an instrument, DAWG HAUS needs to use your microphone. Chrome will ask for permission the first time.'),
+      h('button', {
+        class: 'pbtn accent big', onclick: async () => {
+          try { await eng.openInput(inp.deviceId); eng.syncInput(t.id); this.render(); } catch (e) { alert(`The microphone could not be opened: ${e.message}`); }
+        },
+      }, '🎙 Turn on microphone'));
+  } else {
+    const devSel = h('select', {
+      onchange: async (e) => {
+        setInput({ deviceId: e.target.value });
+        try { await eng.openInput(e.target.value); eng.syncInput(t.id); } catch (err) { alert(err.message); }
+        this.render();
+      },
+    }, h('option', { value: '' }, 'Default microphone'));
+    navigator.mediaDevices.enumerateDevices().then((devs) => {
+      for (const d of devs.filter((x) => x.kind === 'audioinput' && x.deviceId !== 'default')) {
+        devSel.append(h('option', { value: d.deviceId, selected: d.deviceId === inp.deviceId }, d.label || 'Microphone'));
+      }
+    });
+    this.inputMeter = h('i');
+    const gainLabel = h('span', { class: 'pval' }, `${(inp.gain || 0) > 0 ? '+' : ''}${(inp.gain || 0).toFixed(1)} dB`);
+    const lat = +localStorage.getItem('dawg:latencyMs') || 0;
+    const latLabel = h('span', { class: 'pval' }, `${lat > 0 ? '+' : ''}${lat} ms`);
+    left.append(
+      h('div', { class: 'prow' }, h('span', { class: 'plabel' }, 'Input'), devSel, h('span')),
+      h('div', { class: 'prow' }, h('span', { class: 'plabel' }, 'Input level'), h('div', { class: 'in-meter' }, this.inputMeter), h('span', { class: 'pval' }, '')),
+      h('div', { class: 'prow' }, h('span', { class: 'plabel' }, 'Input gain'),
+        h('input', {
+          type: 'range', min: -24, max: 24, step: 0.5, value: inp.gain || 0,
+          oninput: (e) => { const v = +e.target.value; gainLabel.textContent = `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`; setInput({ gain: v }, { merge: `ingain:${t.id}`, silent: true }); eng.syncInput(t.id); },
+        }), gainLabel),
+      h('label', { class: 'prow chkrow' }, h('span', { class: 'plabel' }, 'Monitoring'),
+        h('span', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!inp.monitor, onchange: (e) => { setInput({ monitor: e.target.checked }); } }), ' hear yourself through this track (with its effects) — use headphones'), h('span')),
+      h('div', { class: 'prow' }, h('span', { class: 'plabel', title: 'If recordings land a little late or early, nudge this' }, 'Timing adjust'),
+        h('input', {
+          type: 'range', min: -100, max: 300, step: 1, value: lat,
+          oninput: (e) => { localStorage.setItem('dawg:latencyMs', e.target.value); latLabel.textContent = `${+e.target.value > 0 ? '+' : ''}${e.target.value} ms`; },
+        }), latLabel),
+      h('div', { class: 'hint' }, `Recordings are lined up automatically (about ${Math.round(eng.recordLatency * 1000)} ms of delay is removed). If takes still sound late, move Timing adjust to the right; if early, to the left.`));
+  }
+  const hasTune = (t.fx || []).some((f) => f.type === 'autotune');
+  const right = h('div', { class: 'inst-right' },
+    h('div', { class: 'inst-cat-name', style: { color: CATEGORY_COLORS.Audio } }, 'How to record'),
+    h('ol', { class: 'steps' },
+      h('li', {}, 'Turn on the microphone and pick your input.'),
+      h('li', {}, 'Select this track, put the playhead where you want to start (Count-in helps).'),
+      h('li', {}, 'Press ● Record (or R). Press it again, or Stop, to finish the take.')),
+    h('div', { class: 'inst-cat-name', style: { color: CATEGORY_COLORS.Audio } }, 'Autotune'),
+    hasTune
+      ? h('div', { class: 'hint' }, 'Autotune is on this track. Set the key, scale and retune speed in the Effects tab (it works on playback and while monitoring).')
+      : h('button', {
+        class: 'pbtn accent', onclick: () => {
+          this.store.mutate((pp) => {
+            const x = pp.tracks.find((y) => y.id === t.id);
+            x.fx = [{ id: `fx_${Date.now().toString(36)}`, type: 'autotune', on: true, params: { key: '0', scale: 'major', speed: 20, amount: 1, mix: 1 } }, ...(x.fx || [])];
+          });
+          this.onShowEffects?.();
+        },
+      }, '+ Add Autotune'),
+    h('div', { class: 'hint' }, 'Retune speed 0 ms gives the robotic "hard tune" sound; 50–150 ms sounds natural. Set the song\u2019s key and scale for the best result.'));
+  this.root.append(
+    h('div', { class: 'inst-head' },
+      h('span', { class: 'dot', style: { background: colorForTrack(t) } }), h('b', {}, t.name),
+      h('span', { class: 'muted' }, eng.input ? ` · 🎙 ${eng.input.label}` : ' · microphone off')),
+    h('div', { class: 'inst-body' }, left, right));
+};
 
 InstrumentPanel.prototype.renderDrums = function renderDrums(t) {
   const kit = getKit(t.drums.kit);

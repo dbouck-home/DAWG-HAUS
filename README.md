@@ -1,4 +1,4 @@
-# DAWG HAUS — Phase 4
+# DAWG HAUS — Phase 5
 
 A browser-based digital audio workstation (PWA) for Windows 11 and Chromebooks.
 Plain HTML/CSS/JavaScript with no build step: upload the folder to any static host and it runs.
@@ -20,6 +20,13 @@ Opening `index.html` directly from disk will **not** work, because browsers bloc
 
 Upload the changed files, then raise `VERSION` in `sw.js` (for example `dawghaus-v0.2.1`).
 Installed copies pick up the update the next time they're opened.
+
+## New in Phase 5
+
+- Record vocals or any instrument onto Audio tracks: select the track and press ● (or R); press again to stop. Count-in works here too.
+- Recording settings (Instrument tab on an audio track): microphone choice, input level meter, input gain, monitoring (hear yourself through the track and its effects — use headphones), and a timing adjust in case takes land early or late
+- Takes are lined up automatically to remove the computer's audio delay, show as waveforms, can be moved, trimmed and split (Ctrl+S), and are saved on the device and inside Songs → Back up to file
+- Autotune effect: key, scale (major, minor, pentatonic, blues, modes, chromatic), retune speed (0 ms = robotic "hard tune", 50–150 ms = natural), amount and mix. Works on playback and live while monitoring. "+ Add Autotune" on an audio track adds it in one click.
 
 ## Recent improvements
 
@@ -120,6 +127,5 @@ sw.js, manifest.webmanifest PWA (offline + install)
 
 ## Next phases
 
-5. Audio/vocal recording with monitoring and autotune
 6. Sampler
 7. WAV/MP3 export

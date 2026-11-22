@@ -10,7 +10,7 @@ import { BeatEditor } from './ui/drumeditor.js';
 import { FxPanel } from './ui/fxpanel.js';
 import { KITS, getKit } from './audio/drums.js';
 import { demoProject, newProject, newTrack, newClip, migrateProject, splitClip } from './project.js';
-import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject } from './storage.js';
+import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject, importEmbeddedAudio, saveAudio } from './storage.js';
 import { MidiInput, KEYMAP } from './midi.js';
 import { Timeline } from './ui/timeline.js';
 import { TrackHeaders, Mixer } from './ui/tracks.js';
@@ -42,6 +42,7 @@ async function boot() {
     $('beat-root').hidden = mode !== 'beat';
   }
   const instPanel = new InstrumentPanel({ store, engine, root: $('inst-root') });
+  instPanel.onShowEffects = () => dock.show('effects');
   const fxPanel = new FxPanel({ store, root: $('fx-root'), onAutomate: (trackId, target) => { headers.showAutomation(trackId, target); } });
   Object.assign(store.ui, { showTempo: false });
   const liveTrackId = () => { const t = store.selectedTrack(); return t && t.type !== 'audio' ? t.id : null; };
@@ -60,6 +61,7 @@ async function boot() {
   function openClip(id) {
     const f = store.findClip(id);
     if (!f) return;
+    if (f.track.type === 'audio') { store.setUI({ selectedTrackId: f.track.id, selectedClipId: id }); dock.show('instrument'); return; }
     store.ui.selectedClipId = id;
     store.ui.selectedTrackId = f.track.id;
     store.emit('selection');
@@ -119,6 +121,7 @@ async function boot() {
 
   store.subscribe((kind) => {
     if (kind === 'project' || kind === 'load') { engine.sync(); renderAll(); }
+    if (kind !== 'save') engine.syncInput(store.ui.selectedTrackId);
     else if (kind === 'silent') { engine.sync(); }
     else if (kind === 'ui' || kind === 'selection') {
       headers.updateSelection(); mixer.updateSelection(); timeline.updateSelection();
@@ -131,6 +134,23 @@ async function boot() {
     }
   });
   engine.on('transport', renderTransportFields);
+  engine.on('audio-loaded', () => timeline.render());
+  engine.on('audio-recorded', async ({ trackId, startTick, data, sampleRate }) => {
+    const audioId = `aud_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    try { await saveAudio({ id: audioId, sampleRate, data }); } catch (e) { toast(`Could not save the recording: ${e.message}`); return; }
+    const buf = engine.ctx.createBuffer(1, data.length, sampleRate);
+    buf.copyToChannel(data, 0);
+    engine.audioBuffers.set(audioId, buf);
+    const tm = new TempoMap(store.project.tempos);
+    const endTick = Math.round(tm.secToTick(tm.tickToSec(startTick) + data.length / sampleRate));
+    const tr = store.track(trackId);
+    const n = (tr?.clips.length || 0) + 1;
+    const clip = { ...newClip(startTick, endTick - startTick, []), audioId, srcOffset: 0, name: `Take ${n}` };
+    store.mutate((p) => { p.tracks.find((t) => t.id === trackId)?.clips.push(clip); });
+    store.ui.selectedClipId = clip.id;
+    timeline.updateSelection();
+    toast(`Saved Take ${n} (${(data.length / sampleRate).toFixed(1)} s).`);
+  });
   engine.on('loading', () => { headers.render(); if (dock.open && dock.tab === 'instrument') instPanel.render(); });
 
   // ---------- transport ----------
@@ -188,11 +208,26 @@ async function boot() {
     meterDialog(m.tickToBBT(engine.currentTick()).bar);
   };
 
-  function toggleRecord() {
+  async function toggleRecord() {
     engine.ensureContext();
+    if (engine.audioRec) { engine.stopAudioRecording(); return; }
     if (engine.recording) { engine.stopRecording(); return; }
     const t = store.selectedTrack();
-    if (!t || t.type === 'audio') { toast('Select an instrument or drum track to record onto.'); return; }
+    if (!t) { toast('Select a track to record onto.'); return; }
+    if (t.type === 'audio') {
+      try {
+        await engine.openInput(t.input?.deviceId);
+      } catch (e) {
+        toast('The microphone is blocked — allow it in Chrome (the camera/mic icon in the address bar).');
+        return;
+      }
+      engine.syncInput(t.id);
+      if (!engine.playing) engine.play(engine.positionTick, { countInBars: store.project.countIn || 0 });
+      engine.startAudioRecording(t.id);
+      toast(`Recording audio on "${t.name}" — press ● or R again to stop.`);
+      if (dock.open && dock.tab === 'instrument') instPanel.render();
+      return;
+    }
     if (!engine.playing) engine.play(engine.positionTick, { countInBars: store.project.countIn || 0 });
     engine.startRecording(t.id);
     toast(`Recording on "${t.name}" — play your MIDI or computer keyboard.`);
@@ -379,6 +414,7 @@ async function boot() {
       if (!data) return;
       engine.stop();
       await store.saveNow();
+      await importEmbeddedAudio(data);
       const p = migrateProject(data);
       const existing = await loadProject(p.id);
       if (existing) p.id = `${p.id}_copy${Date.now().toString(36)}`;
@@ -470,7 +506,8 @@ async function boot() {
       for (const { track, clip } of targets) {
         const tr = p.tracks.find((x) => x.id === track.id);
         const i = tr.clips.findIndex((c) => c.id === clip.id);
-        const parts = splitClip(tr.clips[i], at);
+        const tm = new TempoMap(p.tempos);
+        const parts = splitClip(tr.clips[i], at, (tk) => tm.tickToSec(tk));
         if (!parts) continue;
         tr.clips.splice(i, 1, ...parts);
         rightId = parts[1].id;
@@ -516,6 +553,7 @@ async function boot() {
     if (engine.playing && dock.open && dock.tab === 'pianoroll') editor().draw();
     if (engine.ctx) {
       headers.updateMeters();
+      if (instPanel.inputMeter?.isConnected) instPanel.inputMeter.style.width = `${Math.min(100, Math.sqrt(engine.inputPeak()) * 100)}%`;
       if (dock.open && dock.tab === 'mixer') mixer.updateMeters();
     }
     requestAnimationFrame(frame);
