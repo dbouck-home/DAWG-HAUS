@@ -390,3 +390,5 @@ button { cursor: pointer; }
 
 .xbar { height: 8px; background: #0b0d10; border-radius: 4px; overflow: hidden; margin-top: 6px; }
 .xbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.th.multi { background: #1d2a38; box-shadow: inset 3px 0 0 var(--accent); }
+.th.multi.selected { background: #23344a; }

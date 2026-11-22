@@ -174,10 +174,33 @@ export function splitClip(clip, at, secAt) {
   const rel = Math.round(at - clip.start);
   if (rel <= 0 || rel >= clip.length) return null;
   if (clip.audioId) {
-    // recorded audio: the right half starts later in the same recording
+    const sec = (a, b) => (secAt ? secAt(b) - secAt(a) : 0);
+    const L = clip.loop && clip.loop > 0 && clip.length > clip.loop ? clip.loop : 0;
+    if (!L) {
+      // recorded audio: the right half starts later in the same recording
+      const left = { ...clip, id: uid('clp'), length: rel };
+      const right = { ...clip, id: uid('clp'), start: clip.start + rel, length: clip.length - rel, srcOffset: (clip.srcOffset || 0) + sec(clip.start, at) };
+      delete left.loop; delete right.loop;
+      return [left, right];
+    }
+    // looped recording: keep the loop on the left, then the rest of the current repeat, then the remaining repeats
+    const k = Math.floor(rel / L);
+    const repStart = clip.start + k * L;
     const left = { ...clip, id: uid('clp'), length: rel };
-    const right = { ...clip, id: uid('clp'), start: clip.start + rel, length: clip.length - rel, srcOffset: (clip.srcOffset || 0) + (secAt ? secAt(at) - secAt(clip.start) : 0) };
-    return [left, right];
+    if (rel <= L) delete left.loop;
+    const parts = [left];
+    const repEnd = Math.min(repStart + L, clip.start + clip.length);
+    if (at < repEnd) {
+      const mid = { ...clip, id: uid('clp'), start: at, length: repEnd - at, srcOffset: (clip.srcOffset || 0) + sec(repStart, at) };
+      delete mid.loop;
+      parts.push(mid);
+    }
+    if (repEnd < clip.start + clip.length) {
+      const rest = { ...clip, id: uid('clp'), start: repEnd, length: clip.start + clip.length - repEnd, loop: L };
+      if (rest.length <= L) delete rest.loop;
+      parts.push(rest);
+    }
+    return parts;
   }
   const notes = expandNotes(clip);
   const base = { ...clip };

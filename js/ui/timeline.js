@@ -115,7 +115,7 @@ export class Timeline {
     if (clip.loop && clip.length > L) {
       for (let x2 = L; x2 < clip.length - 1; x2 += L) el.append(h('div', { class: 'rep-seam', style: { left: `${this.tickToX(x2)}px` } }));
     }
-    if (track.type !== 'audio') {
+    {
       el.append(h('div', {
         class: 'repeat', 'data-repeat': '1',
         title: 'Repeat · click: one more time · drag right/left: repeat more or less (drag back to remove repeats, stop halfway for half a repeat) · Shift-click: to the end of the song · right-click: more options',
@@ -132,19 +132,22 @@ export class Timeline {
     if (!pk) return c; // drawn once the recording has loaded
     const g = c.getContext('2d');
     const tempo = new TempoMap(this.store.project.tempos);
-    const secStart = tempo.tickToSec(clip.start);
-    const secLen = tempo.tickToSec(clip.start + clip.length) - secStart;
     const off = clip.srcOffset || 0;
     const n = pk.data.length / 2;
     g.fillStyle = shade(color, 1.4);
     const mid = H / 2;
     const gainMul = Math.pow(10, (clip.gain || 0) / 20);
+    const L = clip.loop && clip.loop > 0 ? clip.loop : clip.length;
     for (let x = 0; x < cw; x++) {
-      const s0 = off + (x / cw) * secLen;
-      const s1 = off + ((x + 1) / cw) * secLen;
+      // which repeat this pixel is in, and where inside the recording that is
+      const tick = clip.start + (x / cw) * clip.length;
+      const k = Math.floor((tick - clip.start) / L);
+      const base = clip.start + k * L;
+      const s0 = off + tempo.tickToSec(tick) - tempo.tickToSec(base);
+      const s1 = s0 + (tempo.tickToSec(clip.start + ((x + 1) / cw) * clip.length) - tempo.tickToSec(tick));
       const i0 = Math.floor((s0 * pk.sampleRate) / pk.per);
       const i1 = Math.max(i0 + 1, Math.ceil((s1 * pk.sampleRate) / pk.per));
-      if (i0 >= n) break;
+      if (i0 >= n) continue;
       let lo = 0; let hi = 0;
       for (let i = i0; i < Math.min(i1, n); i++) { lo = Math.min(lo, pk.data[i * 2]); hi = Math.max(hi, pk.data[i * 2 + 1]); }
       const y1 = mid - Math.min(1, hi * gainMul) * mid;
@@ -569,13 +572,16 @@ export class Timeline {
       if (!laneEl) return;
       const trackId = laneEl.dataset.track;
       if (!clipEl) {
+        this.store.ui.focus = 'track';
         this.store.setUI({ selectedTrackId: trackId, selectedClipId: null });
         return;
       }
+      this.store.ui.focus = 'clip';
       const found = this.store.findClip(clipEl.dataset.clip);
       if (!found) return;
       const { clip, track } = found;
       this.store.ui.selectedTrackId = track.id;
+      this.store.ui.selectedTrackIds = [track.id];
       this.store.ui.selectedClipId = clip.id;
       this.rows.querySelectorAll('.clip.selected').forEach((c) => c.classList.remove('selected'));
       clipEl.classList.add('selected');

@@ -91,6 +91,8 @@ export class Store {
   }
 
   setUI(patch) {
+    // picking a single track elsewhere (lane, mixer) ends a multi-selection
+    if (patch.selectedTrackId && !patch.selectedTrackIds) patch = { ...patch, selectedTrackIds: [patch.selectedTrackId] };
     Object.assign(this.ui, patch);
     this.emit('ui');
   }

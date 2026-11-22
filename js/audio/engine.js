@@ -456,33 +456,48 @@ export class Engine {
     for (const c of t.clips) {
       if (!c.audioId) continue;
       const cEnd = c.start + c.length;
-      let startTick;
-      if (c.start >= from && c.start < to) startTick = c.start;
-      else if (fresh && c.start < from && cEnd > from) startTick = from; // playback starts inside the clip
-      else continue;
+      if (cEnd <= from || c.start >= to) continue;
       const buf = this.audioBuffers.get(c.audioId);
       if (!buf) { this.loadAudioBuffer(c.audioId); continue; }
-      const endTick = Math.min(cEnd, cutTick);
-      if (endTick <= startTick) continue;
-      const when = time(startTick);
-      const offset = (c.srcOffset || 0) + (tempo.tickToSec(startTick) - tempo.tickToSec(c.start));
-      const dur = time(endTick) - when;
-      if (offset >= buf.duration || dur <= 0) continue;
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
-      const g = this.ctx.createGain();
-      g.gain.value = dbToGain(c.gain || 0);
-      // tiny fades avoid clicks at the clip edges
-      const now = Math.max(when, this.ctx.currentTime);
-      g.gain.setValueAtTime(0, now);
-      g.gain.linearRampToValueAtTime(dbToGain(c.gain || 0), now + 0.004);
-      g.gain.setValueAtTime(dbToGain(c.gain || 0), now + Math.max(0.005, dur - 0.006));
-      g.gain.linearRampToValueAtTime(0, now + dur);
-      src.connect(g).connect(ch.input);
-      src.start(now, offset + (now - when), Math.max(0, dur - (now - when)));
-      this.sources.add(src);
-      src.onended = () => { this.sources.delete(src); try { g.disconnect(); } catch { /* ignore */ } };
+      // a looped recording repeats its section every `loop` ticks
+      const L = c.loop && c.loop > 0 ? c.loop : c.length;
+      const kFrom = Math.max(0, Math.floor((from - c.start) / L));
+      const kTo = Math.floor((to - c.start) / L);
+      for (let k = kFrom; k <= kTo; k++) {
+        const base = c.start + k * L;
+        const repEnd = Math.min(base + L, cEnd);
+        if (repEnd <= from || base >= to || base >= cEnd) continue;
+        let startTick;
+        if (base >= from && base < to) startTick = base;
+        else if (fresh && base < from && repEnd > from) startTick = from; // playback starts inside it
+        else continue;
+        this.playAudioSegment(ch, c, buf, startTick, base, Math.min(repEnd, cutTick), time, tempo);
+      }
     }
+  }
+
+  /** Play part of a recording: the section that starts at `base` (song ticks), from `startTick` to `endTick`. */
+  playAudioSegment(ch, c, buf, startTick, base, endTick, time, tempo) {
+    if (endTick <= startTick) return;
+    const when = time(startTick);
+    const offset = (c.srcOffset || 0) + (tempo.tickToSec(startTick) - tempo.tickToSec(base));
+    const dur = time(endTick) - when;
+    if (offset >= buf.duration || dur <= 0) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const g = this.ctx.createGain();
+    const lvl = dbToGain(c.gain || 0);
+    // tiny fades avoid clicks at the edges
+    const now = Math.max(when, this.ctx.currentTime);
+    const len = Math.max(0, dur - (now - when));
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(lvl, now + 0.004);
+    g.gain.setValueAtTime(lvl, now + Math.max(0.005, len - 0.006));
+    g.gain.linearRampToValueAtTime(0, now + len);
+    src.connect(g).connect(ch.input);
+    src.start(now, offset + (now - when), len);
+    this.sources.add(src);
+    src.onended = () => { this.sources.delete(src); try { g.disconnect(); } catch { /* ignore */ } };
   }
 
   stopSources() {
@@ -528,21 +543,43 @@ export class Engine {
   // ---------- microphone input, monitoring and audio recording ----------
 
   /** Open (or switch) the microphone. Returns the device label. */
-  async openInput(deviceId) {
+  /**
+   * Open (or switch) the microphone / audio interface.
+   * channel: 'both' (mix the first two inputs), '1' (input 1 / left) or '2' (input 2 / right) —
+   * audio interfaces usually put a mic on just one of their inputs.
+   */
+  async openInput(deviceId, channel = 'both') {
     this.ensureContext();
     await this.workletsReady;
-    if (this.input && this.input.deviceId === (deviceId || '') && this.input.stream.active) return this.input.label;
+    const live = this.input?.stream.getAudioTracks().some((tr) => tr.readyState === 'live');
+    if (this.input && live && this.input.deviceId === (deviceId || '') && this.input.channel === channel) return this.input.label;
     this.closeInput();
-    const stream = await navigator.mediaDevices.getUserMedia({
+    const constraints = (id) => ({
       audio: {
-        deviceId: deviceId ? { exact: deviceId } : undefined,
+        deviceId: id ? { exact: id } : undefined,
         echoCancellation: false, noiseSuppression: false, autoGainControl: false,
-        latency: 0,
+        channelCount: { ideal: 2 },
       },
     });
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints(deviceId));
+    } catch (e) {
+      // the saved device is gone (unplugged) — fall back to the default input
+      if (deviceId && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) stream = await navigator.mediaDevices.getUserMedia(constraints(''));
+      else throw e;
+    }
     const ctx = this.ctx;
     const src = ctx.createMediaStreamSource(stream);
     const gain = ctx.createGain();
+    const chCount = stream.getAudioTracks()[0]?.getSettings?.().channelCount || 1;
+    if (channel !== 'both' && chCount > 1) {
+      const split = ctx.createChannelSplitter(2);
+      src.connect(split);
+      split.connect(gain, channel === '2' ? 1 : 0);
+    } else {
+      src.connect(gain);
+    }
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     const recorder = new AudioWorkletNode(ctx, 'dawg-recorder', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
@@ -550,14 +587,14 @@ export class Engine {
     monitor.gain.value = 0;
     const sink = ctx.createGain();
     sink.gain.value = 0;
-    src.connect(gain).connect(analyser);
+    gain.connect(analyser);
     gain.connect(recorder);
     recorder.connect(sink).connect(ctx.destination); // keeps the recorder running
     recorder.connect(monitor);
     const track = stream.getAudioTracks()[0];
     const settings = track.getSettings?.() || {};
     this.input = {
-      stream, src, gain, analyser, recorder, monitor, sink, deviceId: deviceId || '',
+      stream, src, gain, analyser, recorder, monitor, sink, deviceId: deviceId || '', channel, channels: chCount,
       label: track.label || 'Microphone', latency: settings.latency || 0.01, buf: new Float32Array(1024), monitorTo: null,
     };
     recorder.port.onmessage = (e) => this.onRecorderMessage(e.data);

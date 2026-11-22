@@ -10,12 +10,12 @@ import { BeatEditor } from './ui/drumeditor.js';
 import { FxPanel } from './ui/fxpanel.js';
 import { renderSong, encodeWav, encodeMp3, normalize, download, songEndTick } from './export.js';
 import { KITS, getKit } from './audio/drums.js';
-import { demoProject, newProject, newTrack, newClip, migrateProject, splitClip } from './project.js';
+import { demoProject, newProject, newTrack, newClip, migrateProject, splitClip, uid } from './project.js';
 import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject, importEmbeddedAudio, saveAudio } from './storage.js';
 import { MidiInput, KEYMAP } from './midi.js';
 import { Timeline } from './ui/timeline.js';
 import { TrackHeaders, Mixer } from './ui/tracks.js';
-import { h, openModal, promptText, confirmBox, toast, isModalOpen } from './ui/dom.js';
+import { h, openModal, promptText, confirmBox, toast, isModalOpen, popupMenu } from './ui/dom.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -33,6 +33,7 @@ async function boot() {
   const timeline = new Timeline({ store, engine, onEditMeter: (bar) => meterDialog(bar), onOpenClip: (id) => openClip(id) });
   const headers = new TrackHeaders({
     store, engine,
+    onMenu: (e, ids) => trackMenu(e, ids),
     onShowFx: (id) => { store.setUI({ selectedTrackId: id }); fxPanel.target = 'track'; dock.show('effects'); },
     onShowInstrument: (id) => { store.setUI({ selectedTrackId: id }); dock.show('instrument'); },
   });
@@ -221,7 +222,7 @@ async function boot() {
     if (!t) { toast('Select a track to record onto.'); return; }
     if (t.type === 'audio') {
       try {
-        await engine.openInput(t.input?.deviceId);
+        await engine.openInput(t.input?.deviceId, t.input?.channel || 'both');
       } catch (e) {
         toast('The microphone is blocked — allow it in Chrome (the camera/mic icon in the address bar).');
         return;
@@ -520,6 +521,22 @@ async function boot() {
   });
   midi.init();
 
+  // audio interfaces / mics plugged in or removed while the app is open
+  let knownInputs = null;
+  const scanInputs = async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications');
+    const ids = new Map(devs.map((d) => [d.deviceId, d.label || 'audio input']));
+    if (knownInputs) {
+      for (const [id, label] of ids) if (!knownInputs.has(id)) toast(`New audio input connected: ${label}. Choose it in an audio track's Instrument tab.`);
+      for (const [id, label] of knownInputs) if (!ids.has(id)) toast(`Audio input disconnected: ${label}.`);
+    }
+    knownInputs = ids;
+    if (dock.open && dock.tab === 'instrument' && store.selectedTrack()?.type === 'audio') instPanel.render();
+  };
+  scanInputs();
+  navigator.mediaDevices?.addEventListener?.('devicechange', scanInputs);
+
   const isTyping = (e) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) && e.target.type !== 'range';
 
   document.addEventListener('keydown', (e) => {
@@ -530,6 +547,8 @@ async function boot() {
     if (ctrl && e.code === 'KeyY') { e.preventDefault(); store.redo(); return; }
     if (ctrl && e.code === 'KeyS') { e.preventDefault(); splitAtPlayhead(); return; }
     if (ctrl && e.code === 'KeyD') { e.preventDefault(); duplicateClip(); return; }
+    if (ctrl && e.code === 'KeyC') { e.preventDefault(); copySelection(); return; }
+    if (ctrl && e.code === 'KeyV') { e.preventDefault(); paste(); return; }
     if (ctrl) return;
     if (e.code === 'Space') { e.preventDefault(); if (e.repeat) return; if (document.activeElement?.blur) document.activeElement.blur(); togglePlay(); return; }
     if (e.code === 'Home' || e.code === 'Enter') { e.preventDefault(); engine.setPosition(0); timeline.arrange.scrollLeft = 0; return; }
@@ -591,6 +610,104 @@ async function boot() {
     });
     if (rightId) { store.ui.selectedClipId = rightId; timeline.updateSelection(); }
     toast(`Split ${targets.length} clip${targets.length === 1 ? '' : 's'} at the playhead.`);
+  }
+
+  // ---------- track menu: merge, copy / paste, duplicate, delete ----------
+  let clipboard = null; // { kind: 'tracks', tracks } | { kind: 'clip', trackType, clip }
+  const family = (t) => (t.type === 'audio' ? 'audio' : 'notes');
+
+  /** Deep copy of tracks with fresh ids (effects, lanes and clips too). */
+  function cloneTracks(tracks) {
+    return tracks.map((t) => {
+      const c = JSON.parse(JSON.stringify(t));
+      c.id = uid('trk');
+      const fxMap = {};
+      for (const f of c.fx || []) { const nid = uid('fx'); fxMap[f.id] = nid; f.id = nid; }
+      for (const a of c.automation || []) {
+        a.id = uid('au');
+        if (a.target.startsWith('fx:')) { const [, id, k] = a.target.split(':'); a.target = `fx:${fxMap[id] || id}:${k}`; }
+      }
+      for (const cl of c.clips) cl.id = uid('clp');
+      return c;
+    });
+  }
+
+  function mergeTracks(ids) {
+    const tracks = store.project.tracks.filter((t) => ids.includes(t.id));
+    if (tracks.length < 2) return;
+    if (new Set(tracks.map(family)).size > 1) { toast('Audio tracks can only be merged with other audio tracks.'); return; }
+    const target = tracks[0];
+    const others = tracks.slice(1).map((t) => t.id);
+    let moved = 0;
+    store.mutate((p) => {
+      const tgt = p.tracks.find((t) => t.id === target.id);
+      for (const t of p.tracks.filter((x) => others.includes(x.id))) { tgt.clips.push(...t.clips); moved += t.clips.length; }
+      tgt.clips.sort((a, b) => a.start - b.start);
+      p.tracks = p.tracks.filter((t) => !others.includes(t.id));
+    });
+    store.setUI({ selectedTrackId: target.id, selectedTrackIds: [target.id] });
+    toast(`Merged ${tracks.length} tracks into "${store.track(target.id).name}" (${moved} clip${moved === 1 ? '' : 's'} moved; it keeps that track's sound and effects).`);
+  }
+
+  function copySelection() {
+    if (store.ui.focus === 'clip' && store.ui.selectedClipId) {
+      const f = store.findClip(store.ui.selectedClipId);
+      if (f) { clipboard = { kind: 'clip', trackType: family(f.track), clip: JSON.parse(JSON.stringify(f.clip)) }; toast('Copied the clip — Ctrl+V pastes it at the playhead on the selected track.'); return; }
+    }
+    const ids = headers.multi();
+    if (!ids.length) return;
+    clipboard = { kind: 'tracks', tracks: JSON.parse(JSON.stringify(store.project.tracks.filter((t) => ids.includes(t.id)))) };
+    toast(`Copied ${ids.length} track${ids.length === 1 ? '' : 's'} — Ctrl+V pastes ${ids.length === 1 ? 'it' : 'them'} below the selected track.`);
+  }
+
+  function paste() {
+    if (!clipboard) { toast('Nothing copied yet — select a track (or clip) and press Ctrl+C.'); return; }
+    if (clipboard.kind === 'tracks') {
+      const copies = cloneTracks(clipboard.tracks);
+      store.mutate((p) => {
+        const sel = headers.multi();
+        const lastSel = sel.length ? Math.max(...sel.map((id) => p.tracks.findIndex((t) => t.id === id))) : p.tracks.length - 1;
+        p.tracks.splice(lastSel + 1, 0, ...copies);
+      });
+      store.setUI({ selectedTrackId: copies[0].id, selectedTrackIds: copies.map((t) => t.id) });
+      toast(`Pasted ${copies.length} track${copies.length === 1 ? '' : 's'}.`);
+      return;
+    }
+    const t = store.selectedTrack();
+    if (!t || family(t) !== clipboard.trackType) { toast(clipboard.trackType === 'audio' ? 'Select an audio track to paste this clip.' : 'Select an instrument, drum or sampler track to paste this clip.'); return; }
+    const m = new MeterMap(store.project.meters);
+    const clip = { ...JSON.parse(JSON.stringify(clipboard.clip)), id: uid('clp'), start: m.snap(engine.currentTick(), store.ui.snap === 'off' ? 'beat' : store.ui.snap) };
+    store.mutate((p) => { p.tracks.find((x) => x.id === t.id).clips.push(clip); });
+    store.ui.selectedClipId = clip.id;
+    store.ui.focus = 'clip';
+    timeline.updateSelection();
+  }
+
+  function trackMenu(e, ids) {
+    const tracks = store.project.tracks.filter((t) => ids.includes(t.id));
+    const n = tracks.length;
+    const canMerge = n >= 2 && new Set(tracks.map(family)).size === 1;
+    popupMenu(e.clientX, e.clientY, [
+      {
+        label: n >= 2 ? `Merge ${n} tracks into one` : 'Merge tracks…',
+        hint: n >= 2 ? (canMerge ? `→ ${tracks[0].name}` : 'audio + instruments can\u2019t mix') : 'Ctrl-click another track first',
+        disabled: !canMerge, onClick: () => mergeTracks(ids),
+      },
+      '-',
+      { label: n > 1 ? `Copy ${n} tracks` : 'Copy track', hint: 'Ctrl+C', onClick: () => { store.ui.focus = 'track'; copySelection(); } },
+      { label: clipboard?.kind === 'tracks' ? `Paste ${clipboard.tracks.length > 1 ? `${clipboard.tracks.length} tracks` : 'track'}` : 'Paste track', hint: 'Ctrl+V', disabled: clipboard?.kind !== 'tracks', onClick: () => paste() },
+      { label: n > 1 ? `Duplicate ${n} tracks` : 'Duplicate track', onClick: () => { store.ui.focus = 'track'; copySelection(); paste(); } },
+      '-',
+      {
+        label: n > 1 ? `Delete ${n} tracks` : 'Delete track',
+        onClick: async () => {
+          if (!(await confirmBox('Delete tracks?', `${tracks.map((t) => `"${t.name}"`).join(', ')} will be deleted. You can undo this.`, 'Delete', true))) return;
+          store.mutate((p) => { p.tracks = p.tracks.filter((t) => !ids.includes(t.id)); });
+          store.fixSelection();
+          store.emit('project');
+        },
+      },
+    ]);
   }
 
   function deleteClip() {

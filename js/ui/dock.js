@@ -179,33 +179,40 @@ InstrumentPanel.prototype.renderAudio = function renderAudio(t) {
     x.input = { ...(x.input || {}), ...patch };
   }, opts);
   const left = h('div', { class: 'inst-right' });
+  const open = async (deviceId, channel) => {
+    try { await eng.openInput(deviceId, channel); eng.syncInput(t.id); } catch (e) { alert(`That input could not be opened: ${e.message}`); }
+    this.render();
+  };
+  // input list (names appear once the browser has microphone permission)
+  const devSel = h('select', {
+    onchange: (e) => { setInput({ deviceId: e.target.value }); if (eng.input) open(e.target.value, inp.channel || 'both'); },
+  }, h('option', { value: '' }, 'Default input (set by your computer)'));
+  navigator.mediaDevices?.enumerateDevices().then((devs) => {
+    const ins = devs.filter((x) => x.kind === 'audioinput' && x.deviceId !== 'default' && x.deviceId !== 'communications');
+    ins.forEach((d, i) => devSel.append(h('option', { value: d.deviceId, selected: d.deviceId === inp.deviceId }, d.label || `Input ${i + 1} (turn on the microphone to see its name)`)));
+  });
+  const chanSel = h('select', {
+    title: 'Audio interfaces put each mic or instrument on its own input',
+    onchange: (e) => { setInput({ channel: e.target.value }); if (eng.input) open(inp.deviceId, e.target.value); },
+  },
+  h('option', { value: 'both', selected: (inp.channel || 'both') === 'both' }, 'Inputs 1 + 2 (mixed)'),
+  h('option', { value: '1', selected: inp.channel === '1' }, 'Input 1 only (left)'),
+  h('option', { value: '2', selected: inp.channel === '2' }, 'Input 2 only (right)'));
+  left.append(
+    h('div', { class: 'prow' }, h('span', { class: 'plabel' }, 'Input device'), devSel,
+      h('button', { class: 'pbtn', title: 'Look for newly plugged-in devices', onclick: () => this.render() }, '↻')),
+    h('div', { class: 'prow' }, h('span', { class: 'plabel' }, 'Input channel'), chanSel,
+      h('span', { class: 'pval' }, eng.input ? `${eng.input.channels} ch` : '')));
   if (!eng.input) {
     left.append(
-      h('div', { class: 'hint' }, 'To record vocals or an instrument, DAWG HAUS needs to use your microphone. Chrome will ask for permission the first time.'),
-      h('button', {
-        class: 'pbtn accent big', onclick: async () => {
-          try { await eng.openInput(inp.deviceId); eng.syncInput(t.id); this.render(); } catch (e) { alert(`The microphone could not be opened: ${e.message}`); }
-        },
-      }, '🎙 Turn on microphone'));
+      h('div', { class: 'hint' }, 'To record vocals or an instrument, DAWG HAUS needs to use your microphone or audio interface. Chrome will ask for permission the first time.'),
+      h('button', { class: 'pbtn accent big', onclick: () => open(inp.deviceId, inp.channel || 'both') }, '🎙 Turn on input'));
   } else {
-    const devSel = h('select', {
-      onchange: async (e) => {
-        setInput({ deviceId: e.target.value });
-        try { await eng.openInput(e.target.value); eng.syncInput(t.id); } catch (err) { alert(err.message); }
-        this.render();
-      },
-    }, h('option', { value: '' }, 'Default microphone'));
-    navigator.mediaDevices.enumerateDevices().then((devs) => {
-      for (const d of devs.filter((x) => x.kind === 'audioinput' && x.deviceId !== 'default')) {
-        devSel.append(h('option', { value: d.deviceId, selected: d.deviceId === inp.deviceId }, d.label || 'Microphone'));
-      }
-    });
     this.inputMeter = h('i');
     const gainLabel = h('span', { class: 'pval' }, `${(inp.gain || 0) > 0 ? '+' : ''}${(inp.gain || 0).toFixed(1)} dB`);
     const lat = +localStorage.getItem('dawg:latencyMs') || 0;
     const latLabel = h('span', { class: 'pval' }, `${lat > 0 ? '+' : ''}${lat} ms`);
     left.append(
-      h('div', { class: 'prow' }, h('span', { class: 'plabel' }, 'Input'), devSel, h('span')),
       h('div', { class: 'prow' }, h('span', { class: 'plabel' }, 'Input level'), h('div', { class: 'in-meter' }, this.inputMeter), h('span', { class: 'pval' }, '')),
       h('div', { class: 'prow' }, h('span', { class: 'plabel' }, 'Input gain'),
         h('input', {
@@ -219,13 +226,13 @@ InstrumentPanel.prototype.renderAudio = function renderAudio(t) {
           type: 'range', min: -100, max: 300, step: 1, value: lat,
           oninput: (e) => { localStorage.setItem('dawg:latencyMs', e.target.value); latLabel.textContent = `${+e.target.value > 0 ? '+' : ''}${e.target.value} ms`; },
         }), latLabel),
-      h('div', { class: 'hint' }, `Recordings are lined up automatically (about ${Math.round(eng.recordLatency * 1000)} ms of delay is removed). If takes still sound late, move Timing adjust to the right; if early, to the left.`));
+      h('div', { class: 'hint' }, `Using “${eng.input.label}”. If the level meter doesn’t move, try the other Input channel, or check the interface’s gain knob and that its USB cable is plugged in. Recordings are lined up automatically (about ${Math.round(eng.recordLatency * 1000)} ms of delay removed).`));
   }
   const hasTune = (t.fx || []).some((f) => f.type === 'autotune');
   const right = h('div', { class: 'inst-right' },
     h('div', { class: 'inst-cat-name', style: { color: CATEGORY_COLORS.Audio } }, 'How to record'),
     h('ol', { class: 'steps' },
-      h('li', {}, 'Turn on the microphone and pick your input.'),
+      h('li', {}, 'Pick your input device (audio interface or mic) and channel, then turn it on.'),
       h('li', {}, 'Select this track, put the playhead where you want to start (Count-in helps).'),
       h('li', {}, 'Press ● Record (or R). Press it again, or Stop, to finish the take.')),
     h('div', { class: 'inst-cat-name', style: { color: CATEGORY_COLORS.Audio } }, 'Autotune'),
@@ -244,7 +251,7 @@ InstrumentPanel.prototype.renderAudio = function renderAudio(t) {
   this.root.append(
     h('div', { class: 'inst-head' },
       h('span', { class: 'dot', style: { background: colorForTrack(t) } }), h('b', {}, t.name),
-      h('span', { class: 'muted' }, eng.input ? ` · 🎙 ${eng.input.label}` : ' · microphone off')),
+      h('span', { class: 'muted' }, eng.input ? ` · 🎙 ${eng.input.label}` : ' · input off')),
     h('div', { class: 'inst-body' }, left, right));
 };
 

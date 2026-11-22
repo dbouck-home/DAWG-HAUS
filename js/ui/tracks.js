@@ -22,7 +22,8 @@ function instrumentSelect(track, onChange) {
 }
 
 export class TrackHeaders {
-  constructor({ store, engine, onShowFx, onShowInstrument }) {
+  constructor({ store, engine, onShowFx, onShowInstrument, onMenu }) {
+    this.onMenu = onMenu;
     this.store = store;
     this.engine = engine;
     this.onShowFx = onShowFx;
@@ -115,7 +116,8 @@ export class TrackHeaders {
       const el = h('div', {
         class: `th ${selected ? 'selected' : ''}`,
         'data-track': t.id,
-        onpointerdown: () => { if (this.store.ui.selectedTrackId !== t.id) this.store.setUI({ selectedTrackId: t.id }); },
+        onpointerdown: (e) => { if (e.button === 2 && this.multi().includes(t.id)) return; this.pick(e, t.id); },
+        oncontextmenu: (e) => { e.preventDefault(); if (!this.multi().includes(t.id)) this.pick({}, t.id); this.onMenu?.(e, this.multi()); },
       },
       h('div', { class: 'color', title: 'Track color — click to change', style: { background: colorForTrack(t) }, onclick: (e) => this.colorPicker(e, t) }),
       h('div', { class: 'body' },
@@ -167,9 +169,41 @@ export class TrackHeaders {
     setTimeout(() => document.addEventListener('pointerdown', close, true), 0);
   }
 
+  /** Selected tracks, in song order (Ctrl/Shift-click selects several). */
+  multi() {
+    const ui = this.store.ui;
+    const ids = new Set(ui.selectedTrackIds || []);
+    if (ui.selectedTrackId) ids.add(ui.selectedTrackId);
+    return this.store.project.tracks.filter((t) => ids.has(t.id)).map((t) => t.id);
+  }
+
+  pick(e, id) {
+    const ui = this.store.ui;
+    ui.focus = 'track';
+    if (e.ctrlKey || e.metaKey) {
+      const cur = new Set(this.multi());
+      if (cur.has(id) && cur.size > 1) { cur.delete(id); if (ui.selectedTrackId === id) ui.selectedTrackId = [...cur][0]; } else { cur.add(id); ui.selectedTrackId = id; }
+      ui.selectedTrackIds = [...cur];
+    } else if (e.shiftKey && ui.selectedTrackId) {
+      const ids = this.store.project.tracks.map((t) => t.id);
+      const a = ids.indexOf(ui.selectedTrackId); const b = ids.indexOf(id);
+      ui.selectedTrackIds = ids.slice(Math.min(a, b), Math.max(a, b) + 1);
+    } else {
+      ui.selectedTrackIds = [id];
+      if (ui.selectedTrackId === id) { this.updateSelection(); return; }
+      ui.selectedTrackId = id;
+    }
+    this.store.emit('selection');
+    this.store.emit('ui');
+  }
+
   updateSelection() {
     const id = this.store.ui.selectedTrackId;
-    this.el.querySelectorAll('.th').forEach((e) => e.classList.toggle('selected', e.dataset.track === id));
+    const multi = new Set(this.multi());
+    this.el.querySelectorAll('.th').forEach((e) => {
+      e.classList.toggle('selected', e.dataset.track === id);
+      e.classList.toggle('multi', multi.size > 1 && multi.has(e.dataset.track));
+    });
   }
 
   setVol(t, v) {

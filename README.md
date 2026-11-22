@@ -21,6 +21,13 @@ Opening `index.html` directly from disk will **not** work, because browsers bloc
 Upload the changed files, then raise `VERSION` in `sw.js` (for example `dawghaus-v0.2.1`).
 Installed copies pick up the update the next time they're opened.
 
+## Latest updates
+
+- Audio recordings loop too: use the ⟳ repeat handle on a take (click, drag, Shift-click, or right-click for the menu)
+- Select several tracks with Ctrl-click (or Shift-click for a range), then right-click a track header for Merge, Copy, Paste, Duplicate or Delete. Merging moves every clip onto the top track, which keeps its sound and effects.
+- Ctrl+C / Ctrl+V copy and paste tracks (click a track header first) or clips (click a clip first; it pastes at the playhead on the selected track)
+- Audio interfaces: choose the input device and the input channel (Input 1, Input 2, or both) in an audio track's Instrument tab; devices plugged in while the app is open are detected, and an unplugged device falls back to the default input
+
 ## New in Phase 7
 
 - ⤓ Export (top bar): MP3 (320 / 192 / 128 kbps) or WAV (16-bit or 24-bit), whole song or just the loop region, 44.1 or 48 kHz, an adjustable ending tail for reverb and delay, and optional normalizing to −1 dB
