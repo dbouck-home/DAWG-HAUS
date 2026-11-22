@@ -1,11 +1,12 @@
 // Bottom dock: Piano Roll, Instrument, Mixer and on-screen Keyboard tabs.
 import { PRESETS, CATEGORY_COLORS, getPreset, paramDefs, paramValue, colorForTrack } from '../audio/presets.js';
 import { KEYMAP } from '../midi.js';
+import { KITS, getKit, PAD_PARAMS, padSetting } from '../audio/drums.js';
 import { noteName } from '../timing.js';
 import { h } from './dom.js';
 
 export const DOCK_TABS = [
-  { id: 'pianoroll', label: 'Piano Roll' },
+  { id: 'pianoroll', label: 'Editor' },
   { id: 'instrument', label: 'Instrument' },
   { id: 'mixer', label: 'Mixer' },
   { id: 'keyboard', label: 'Keyboard' },
@@ -95,6 +96,7 @@ export class InstrumentPanel {
   render() {
     const t = this.store.selectedTrack();
     this.root.innerHTML = '';
+    if (t?.type === 'drums') { this.renderDrums(t); return; }
     if (!t || t.type !== 'instrument') {
       this.root.append(h('div', { class: 'pane-empty' }, t ? 'Audio tracks get their settings in Phase 5.' : 'Select an instrument track.'));
       return;
@@ -164,6 +166,51 @@ export class InstrumentPanel {
   }
 }
 
+InstrumentPanel.prototype.renderDrums = function renderDrums(t) {
+  const kit = getKit(t.drums.kit);
+  const pick = h('div', { class: 'inst-pick' });
+  const group = h('div', { class: 'inst-cat' }, h('div', { class: 'inst-cat-name', style: { color: CATEGORY_COLORS.Drums } }, 'Drum kits'));
+  for (const k of KITS) {
+    group.append(h('button', {
+      class: `inst-btn ${k.id === kit.id ? 'active' : ''}`,
+      onclick: () => this.store.mutate((pp) => { pp.tracks.find((y) => y.id === t.id).drums = { kit: k.id, pads: {} }; }),
+    }, k.name, h('small', {}, ` ${k.pads.length} pads`)));
+  }
+  pick.append(group);
+  const table = h('div', { class: 'padtable' }, h('span', { class: 'hd' }, 'Pad'), PAD_PARAMS.map((d) => h('span', { class: 'hd' }, d.label)));
+  for (const pad of kit.pads) {
+    table.append(h('span', { class: 'pn', title: 'Click to hear', onclick: () => this.engine.preview(t.id, pad.note, 110, 0.1) }, pad.name));
+    for (const d of PAD_PARAMS) {
+      table.append(h('input', {
+        type: 'range', min: d.min, max: d.max, step: d.step, value: padSetting(t, pad.note, d.key),
+        title: `${pad.name} ${d.label.toLowerCase()} (double-click to reset)`,
+        oninput: (e) => {
+          const v = +e.target.value;
+          this.store.mutate((pp) => {
+            const x = pp.tracks.find((y) => y.id === t.id);
+            x.drums.pads = { ...(x.drums.pads || {}), [pad.note]: { ...(x.drums.pads?.[pad.note] || {}), [d.key]: v } };
+          }, { merge: `pad:${t.id}:${pad.note}:${d.key}`, silent: true });
+        },
+        onchange: () => this.engine.preview(t.id, pad.note, 110, 0.1),
+        ondblclick: () => this.store.mutate((pp) => {
+          const x = pp.tracks.find((y) => y.id === t.id);
+          const ps = { ...(x.drums.pads?.[pad.note] || {}) };
+          delete ps[d.key];
+          x.drums.pads = { ...(x.drums.pads || {}), [pad.note]: ps };
+        }),
+      }));
+    }
+  }
+  this.root.append(
+    h('div', { class: 'inst-head' },
+      h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Drums } }), h('b', {}, t.name),
+      h('span', { class: 'muted' }, ` · ${kit.name} (synthesized drum machine)`),
+      h('div', { class: 'spacer' }),
+      h('button', { class: 'pbtn', onclick: () => this.store.mutate((pp) => { pp.tracks.find((y) => y.id === t.id).drums.pads = {}; }) }, 'Reset pads')),
+    h('div', { class: 'inst-body' }, pick, h('div', { class: 'inst-right' }, table,
+      h('div', { class: 'hint' }, 'Patterns keep working when you switch kits — every kit uses the standard General MIDI drum notes, so MIDI drum pads play the right sounds too.'))));
+};
+
 // ---------- on-screen keyboard ----------
 
 export class OnscreenKeyboard {
@@ -180,6 +227,8 @@ export class OnscreenKeyboard {
   render() {
     this.root.innerHTML = '';
     this.keys.clear();
+    const sel = this.store.selectedTrack();
+    if (sel?.type === 'drums') { this.renderPads(sel); return; }
     const oct = this.store.ui.octave;
     const start = 12 * oct; // one octave below the computer-keyboard octave
     const end = start + 12 * 4;
@@ -224,6 +273,22 @@ export class OnscreenKeyboard {
         h('button', { class: 'pbtn', onclick: () => { this.store.ui.octave = Math.min(7, oct + 1); this.store.emit('ui'); } }, 'Octave ▶'),
         h('span', { class: 'muted' }, t && t.type === 'instrument' ? ` · playing ${t.name} (click, drag across keys, or use the letters shown)` : ' · select an instrument track to play')),
       wrap);
+  }
+
+  renderPads(t) {
+    const kit = getKit(t.drums.kit);
+    const keyNames = Object.keys(KEYMAP).map((c) => c.replace('Key', '').replace('Semicolon', ';'));
+    const grid = h('div', { class: 'pads' });
+    kit.pads.forEach((pad, i) => {
+      const el = h('button', {
+        class: 'pad',
+        onpointerdown: (e) => { e.preventDefault(); this.engine.liveNoteOn(t.id, pad.note, e.shiftKey ? 127 : this.store.ui.kbVelocity); },
+        onpointerup: () => this.engine.liveNoteOff(t.id, pad.note),
+      }, pad.name, h('small', {}, keyNames[i] ? `key ${keyNames[i]}` : ''));
+      this.keys.set(pad.note, el);
+      grid.append(el);
+    });
+    this.root.append(h('div', { class: 'okb-head' }, h('b', {}, `${t.name} pads`), h('span', { class: 'muted' }, ' · click the pads or use the computer keys shown · Shift-click for an accent · hits record when ● Record is on')), grid);
   }
 
   light(p, on) {

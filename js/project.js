@@ -1,6 +1,7 @@
 // Project data model and helpers.
 import { PPQ } from './timing.js';
 import { getPreset } from './audio/presets.js';
+import { getKit, PATTERNS } from './audio/drums.js';
 
 export const PROJECT_VERSION = 1;
 
@@ -10,6 +11,7 @@ export function uid(prefix = 'id') {
 
 export function baseLabel(track) {
   if (track.type === 'audio') return 'Audio';
+  if (track.type === 'drums') return getKit(track.drums?.kit).name;
   return getPreset(track.instrument?.preset).name;
 }
 
@@ -39,7 +41,8 @@ export function newTrack(type = 'instrument', preset = 'soft-keys') {
     solo: false,
     clips: [],
   };
-  if (type === 'instrument') t.instrument = { preset };
+  if (type === 'instrument') t.instrument = { preset, params: {} };
+  if (type === 'drums') t.drums = { kit: preset || '808', pads: {} };
   return t;
 }
 
@@ -97,7 +100,16 @@ export function demoProject() {
   pad.clips.push(newClip(0, 8 * 4 * q, padNotes));
   bass.clips.push(newClip(0, 8 * 4 * q, bassNotes));
   keys.clips.push(newClip(4 * 4 * q, 4 * 4 * q, keyNotes.filter((n) => n.t >= 4 * 4 * q).map((n) => ({ ...n, t: n.t - 4 * 4 * q }))));
-  p.tracks.push(pad, bass, keys);
+  const drums = newTrack('drums', 'boombap');
+  const beat = PATTERNS.find((x) => x.name === 'Boom Bap');
+  const hits = [];
+  for (let bar = 0; bar < 8; bar++) {
+    for (const [note, str] of Object.entries(beat.rows)) {
+      [...str].forEach((ch, i) => { if (ch !== '-') hits.push({ t: bar * 4 * q + i * (q / 4), d: q / 4, p: +note, v: ch === 'X' ? 127 : 96 }); });
+    }
+  }
+  drums.clips.push(newClip(0, 8 * 4 * q, hits));
+  p.tracks.push(drums, pad, bass, keys);
   p.loop = { enabled: false, start: 0, end: 8 * 4 * q };
   applyAutoLabels(p);
   return p;
@@ -110,7 +122,7 @@ export function migrateProject(p) {
   out.version = PROJECT_VERSION;
   out.loop = { ...d.loop, ...(p.loop || {}) };
   out.metronome = { ...d.metronome, ...(p.metronome || {}) };
-  out.tracks = (p.tracks || []).map((t) => ({ ...newTrack(t.type, t.instrument?.preset), ...t }));
+  out.tracks = (p.tracks || []).map((t) => ({ ...newTrack(t.type, t.instrument?.preset || t.drums?.kit), ...t }));
   if (!out.id) out.id = uid('prj');
   applyAutoLabels(out);
   return out;

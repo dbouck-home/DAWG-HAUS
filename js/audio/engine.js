@@ -4,6 +4,7 @@ import { MeterMap, TempoMap } from '../timing.js';
 import { Synth } from './synth.js';
 import { effectivePreset } from './presets.js';
 import { Sampler } from './sampler.js';
+import { DrumKit } from './drums.js';
 
 const LOOKAHEAD = 0.12; // seconds scheduled ahead
 const INTERVAL = 25; // ms between scheduler runs
@@ -101,7 +102,17 @@ export class Engine {
     for (const t of p.tracks) {
       let ch = this.channels.get(t.id);
       if (!ch) { ch = new Channel(this.ctx, this.master); this.channels.set(t.id, ch); }
+      if (t.type === 'drums') {
+        const key = JSON.stringify(t.drums || {});
+        if (!(ch.instrument instanceof DrumKit)) {
+          ch.instrument?.dispose();
+          ch.instrument = new DrumKit(this.ctx, t, ch.input);
+          ch.presetId = null;
+          ch.paramKey = key;
+        } else if (key !== ch.paramKey) { ch.instrument.setTrack(t); ch.paramKey = key; }
+      }
       if (t.type === 'instrument') {
+        if (ch.instrument instanceof DrumKit) { ch.instrument.dispose(); ch.instrument = null; ch.presetId = null; }
         const pid = t.instrument?.preset;
         const pr = effectivePreset(t);
         if (ch.presetId !== pid) {
@@ -220,14 +231,21 @@ export class Engine {
   scheduleRange(from, to, anchor, meter, tempo, p, cutTick) {
     const time = (tick) => this.timeOfTick(tick, anchor, tempo);
     for (const t of p.tracks) {
-      if (t.type !== 'instrument') continue;
+      if (t.type === 'audio') continue;
       const ch = this.channels.get(t.id);
       if (!ch?.instrument) continue;
       for (const c of t.clips) {
         const cEnd = c.start + c.length;
         if (cEnd <= from || c.start >= to) continue;
+        const swing = c.swing ? (c.swing / 100) * ((c.swingGrid || 240) / 3) : 0;
+        const sg = c.swingGrid || 240;
         for (const n of c.notes) {
-          const on = c.start + n.t;
+          let on = c.start + n.t;
+          if (swing) {
+            // delay every second grid step (shuffle feel)
+            const step = Math.round(n.t / sg);
+            if (step % 2 === 1 && Math.abs(n.t - step * sg) < sg * 0.25) on += swing;
+          }
           if (on < from || on >= to || on >= cEnd) continue;
           const off = Math.min(on + n.d, cEnd, cutTick);
           ch.instrument.noteOn(n.p, n.v, time(on));

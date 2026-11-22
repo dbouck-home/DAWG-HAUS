@@ -6,6 +6,8 @@ import { PRESETS, CATEGORY_COLORS } from './audio/presets.js';
 import { growl } from './audio/growl.js';
 import { PianoRoll } from './ui/pianoroll.js';
 import { Dock, InstrumentPanel, OnscreenKeyboard } from './ui/dock.js';
+import { BeatEditor } from './ui/drumeditor.js';
+import { KITS, getKit } from './audio/drums.js';
 import { demoProject, newProject, newTrack, newClip, migrateProject } from './project.js';
 import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject } from './storage.js';
 import { MidiInput, KEYMAP } from './midi.js';
@@ -30,14 +32,22 @@ async function boot() {
   const headers = new TrackHeaders({ store, engine });
   const mixer = new Mixer({ store, engine });
   const pianoRoll = new PianoRoll({ store, engine, root: $('pr-root') });
+  const beatEditor = new BeatEditor({ store, engine, root: $('beat-root') });
+  let editorMode = 'piano'; // 'piano' | 'beat'
+  const editor = () => (editorMode === 'beat' ? beatEditor : pianoRoll);
+  function setEditorMode(mode) {
+    editorMode = mode;
+    $('pr-root').hidden = mode !== 'piano';
+    $('beat-root').hidden = mode !== 'beat';
+  }
   const instPanel = new InstrumentPanel({ store, engine, root: $('inst-root') });
-  const liveTrackId = () => { const t = store.selectedTrack(); return t && t.type === 'instrument' ? t.id : null; };
+  const liveTrackId = () => { const t = store.selectedTrack(); return t && t.type !== 'audio' ? t.id : null; };
   const onscreenKb = new OnscreenKeyboard({ store, engine, root: $('kb-root'), liveTrack: liveTrackId });
   const dock = new Dock({ store, onChange: () => { renderDock(); renderTransportFields(); timeline.layout(); } });
 
   function renderDock() {
     if (!dock.open) return;
-    if (dock.tab === 'pianoroll') pianoRoll.refresh();
+    if (dock.tab === 'pianoroll') editor().refresh();
     if (dock.tab === 'instrument') instPanel.render();
     if (dock.tab === 'mixer') mixer.render();
     if (dock.tab === 'keyboard') onscreenKb.render();
@@ -49,9 +59,10 @@ async function boot() {
     store.ui.selectedClipId = id;
     store.ui.selectedTrackId = f.track.id;
     store.emit('selection');
-    pianoRoll.open(id);
+    setEditorMode(f.track.type === 'drums' ? 'beat' : 'piano');
+    editor().open(id);
     dock.show('pianoroll');
-    pianoRoll.active = true;
+    editor().active = true;
   }
   window.dawgHaus = { store, engine }; // handy for debugging
   let lastMeterLabel = null;
@@ -135,11 +146,11 @@ async function boot() {
   $('btn-zoom-out').onclick = () => timeline.zoom(1 / 1.3);
   for (const tab of ['pianoroll', 'instrument', 'mixer', 'keyboard']) {
     $(`btn-tab-${tab}`).onclick = () => {
-      if (tab === 'pianoroll' && !pianoRoll.clipId && store.ui.selectedClipId) pianoRoll.open(store.ui.selectedClipId);
+      if (tab === 'pianoroll' && !editor().clipId && store.ui.selectedClipId) { openClip(store.ui.selectedClipId); return; }
       dock.toggle(tab);
     };
   }
-  $('arrange').addEventListener('pointerdown', () => { pianoRoll.active = false; }, true);
+  $('arrange').addEventListener('pointerdown', () => { pianoRoll.active = false; beatEditor.active = false; }, true);
   $('logo').onclick = () => {
     const ctx = engine.ensureContext();
     growl(ctx);
@@ -166,7 +177,7 @@ async function boot() {
     engine.ensureContext();
     if (engine.recording) { engine.stopRecording(); return; }
     const t = store.selectedTrack();
-    if (!t || t.type !== 'instrument') { toast('Select an instrument track to record MIDI onto.'); return; }
+    if (!t || t.type === 'audio') { toast('Select an instrument or drum track to record onto.'); return; }
     if (!engine.playing) engine.play();
     engine.startRecording(t.id);
     toast(`Recording on "${t.name}" — play your MIDI or computer keyboard.`);
@@ -183,7 +194,7 @@ async function boot() {
     store.mutate((p) => { p.tracks.find((t) => t.id === trackId)?.clips.push(clip); });
     store.ui.selectedClipId = clip.id;
     timeline.updateSelection();
-    if (dock.open && dock.tab === 'pianoroll') pianoRoll.open(clip.id);
+    if (dock.open && dock.tab === 'pianoroll') openClip(clip.id);
     toast(`Recorded ${notes.length} note${notes.length === 1 ? '' : 's'}.`);
   });
 
@@ -247,9 +258,19 @@ async function boot() {
     let closeFn;
     const add = (type, preset) => {
       const t = newTrack(type, preset);
+      let clip = null;
+      if (type === 'drums') {
+        // start drum tracks with an empty 2-bar clip at the playhead's bar, ready to program
+        const m = new MeterMap(store.project.meters);
+        const bar = m.tickToBBT(engine.currentTick()).bar;
+        const start = m.barToTick(bar);
+        clip = newClip(start, m.barToTick(bar + 2) - start, []);
+        t.clips.push(clip);
+      }
       store.mutate((p) => { p.tracks.push(t); });
-      store.setUI({ selectedTrackId: t.id, selectedClipId: null });
+      store.setUI({ selectedTrackId: t.id, selectedClipId: clip?.id || null });
       closeFn();
+      if (clip) openClip(clip.id);
     };
     const body = h('div', {});
     for (const cat of [...new Set(PRESETS.map((x) => x.category))]) {
@@ -261,11 +282,18 @@ async function boot() {
       }
       body.append(h('div', { class: 'section-label' }, cat), g);
     }
+    const drumGrid = h('div', { class: 'choice-grid' });
+    for (const k of KITS) {
+      drumGrid.append(h('button', { class: 'choice', onclick: () => add('drums', k.id) },
+        h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Drums } }), k.name),
+        h('small', {}, `drum machine · ${k.pads.length} pads`)));
+    }
+    body.prepend(h('div', { class: 'section-label' }, 'Drums'), drumGrid);
     body.append(h('div', { class: 'section-label' }, 'Audio'), h('div', { class: 'choice-grid' },
       h('button', { class: 'choice', onclick: () => add('audio') },
         h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Audio } }), 'Audio Track'),
         h('small', {}, 'vocals & mics · recording in Phase 5'))),
-      h('div', { class: 'hint', style: { marginTop: '10px' } }, 'The drum machine arrives in Phase 3 and the sampler in Phase 6.'));
+      h('div', { class: 'hint', style: { marginTop: '10px' } }, 'The sampler arrives in Phase 6.'));
     closeFn = openModal({ title: 'Add a track', body, buttons: [{ label: 'Cancel' }], width: '720px' });
   };
 
@@ -348,7 +376,7 @@ async function boot() {
   const held = new Map(); // key -> {pitch, trackId}
   const liveTrack = () => {
     const t = store.selectedTrack();
-    return t && t.type === 'instrument' ? t.id : null;
+    return t && t.type !== 'audio' ? t.id : null;
   };
   const midiHeld = new Map();
   const midi = new MidiInput({
@@ -369,7 +397,7 @@ async function boot() {
 
   document.addEventListener('keydown', (e) => {
     if (isModalOpen() || isTyping(e)) return;
-    if (dock.open && dock.tab === 'pianoroll' && pianoRoll.handleKey(e)) { e.preventDefault(); return; }
+    if (dock.open && dock.tab === 'pianoroll' && editor().handleKey(e)) { e.preventDefault(); return; }
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) store.redo(); else store.undo(); return; }
     if (ctrl && e.code === 'KeyY') { e.preventDefault(); store.redo(); return; }
@@ -388,8 +416,15 @@ async function boot() {
       e.preventDefault();
       if (e.repeat || held.has(e.code)) return;
       const id = liveTrack();
-      if (!id) { toast('Select an instrument track to play it.'); return; }
-      const pitch = 12 * (store.ui.octave + 1) + KEYMAP[e.code];
+      if (!id) { toast('Select an instrument or drum track to play it.'); return; }
+      const sel = store.track(id);
+      let pitch = 12 * (store.ui.octave + 1) + KEYMAP[e.code];
+      if (sel.type === 'drums') {
+        // computer keys play the kit's pads in order: A = first pad, W = second, ...
+        const pad = getKit(sel.drums.kit).pads[KEYMAP[e.code]];
+        if (!pad) return;
+        pitch = pad.note;
+      }
       held.set(e.code, { pitch, trackId: id });
       engine.liveNoteOn(id, pitch, store.ui.kbVelocity);
     }
@@ -432,7 +467,7 @@ async function boot() {
     const label = `${bbt.meter.num}/${bbt.meter.den}`;
     if (label !== lastMeterLabel) { $('btn-meter').textContent = label; lastMeterLabel = label; }
     timeline.updatePlayhead();
-    if (engine.playing && dock.open && dock.tab === 'pianoroll') pianoRoll.draw();
+    if (engine.playing && dock.open && dock.tab === 'pianoroll') editor().draw();
     if (engine.ctx) {
       headers.updateMeters();
       if (dock.open && dock.tab === 'mixer') mixer.updateMeters();

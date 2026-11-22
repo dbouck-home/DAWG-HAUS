@@ -283,3 +283,17 @@ button { cursor: pointer; }
 .section-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-top: 4px; }
 
 .th .loading-tag { font-size: 11px; animation: pulse 1s infinite; }
+
+.editor-root { height: 100%; }
+.be-body { grid-template-columns: 130px 1fr; grid-template-rows: 20px 1fr 64px; }
+.be-names { cursor: pointer; }
+.th select.kit { flex: 1; }
+.pads { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; flex: 1; min-height: 0; overflow: auto; align-content: start; }
+.pad { height: 70px; border-radius: 10px; border: 1px solid #5a2a45; background: linear-gradient(#3a2230, #2a1823); color: #ffd1e8; font-weight: 600; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; touch-action: none; }
+.pad small { color: #b88aa3; font-weight: 400; font-size: 11px; }
+.pad.lit, .pad:active { background: linear-gradient(#ff4fa3, #c2266f); color: #fff; }
+.padtable { display: grid; grid-template-columns: 110px repeat(4, 1fr); gap: 4px 10px; align-items: center; font-size: 12px; }
+.padtable .hd { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.padtable input { width: 100%; accent-color: #ff4fa3; }
+.padtable .pn { cursor: pointer; }
+.padtable .pn:hover { color: #ff4fa3; }

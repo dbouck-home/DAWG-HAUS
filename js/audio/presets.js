@@ -14,6 +14,7 @@ export const CATEGORY_COLORS = {
   'Guitar & Plucked': '#3ddc97',
   Mallets: '#ff7ad9',
   Audio: '#e8e8e8',
+  Drums: '#ff4fa3',
 };
 
 const S = (id, name, category, sample, opts = {}) => ({
@@ -130,6 +131,7 @@ export function getPreset(id) {
 
 export function colorForTrack(track) {
   if (track.type === 'audio') return CATEGORY_COLORS.Audio;
+  if (track.type === 'drums') return CATEGORY_COLORS.Drums;
   return CATEGORY_COLORS[getPreset(track.instrument?.preset).category] || '#888';
 }
 

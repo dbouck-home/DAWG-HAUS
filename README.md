@@ -1,4 +1,4 @@
-# DAWG HAUS — Phase 2
+# DAWG HAUS — Phase 3
 
 A browser-based digital audio workstation (PWA) for Windows 11 and Chromebooks.
 Plain HTML/CSS/JavaScript with no build step: upload the folder to any static host and it runs.
@@ -20,6 +20,19 @@ Opening `index.html` directly from disk will **not** work, because browsers bloc
 
 Upload the changed files, then raise `VERSION` in `sw.js` (for example `dawghaus-v0.2.1`).
 Installed copies pick up the update the next time they're opened.
+
+## New in Phase 3
+
+- Drum machine tracks with 8 kits: 808, 909, Trap, Boom Bap, Lo-Fi, Electro, Studio and Latin Percussion (all synthesized, so they load instantly and work offline)
+- Beat editor (double-click a drum clip):
+  - step grid 1/4 to 1/32, plus triplets
+  - click or drag to paint hits; Shift-click for an accent, Alt-click for a soft hit
+  - swing control and a velocity lane for the selected pad
+  - starter beats (Four on the Floor, Rock, Boom Bap, Trap, Disco, Reggaeton, Bossa Nova)
+  - ± Bar to change the clip length
+- Per-pad level, tune, decay and pan in the Instrument tab; switch kits at any time and the pattern keeps playing
+- Keyboard tab shows drum pads; computer keys A, W, S, E… play pads in order; MIDI drum pads use standard General MIDI notes
+- Drum hits record live like any other track
 
 ## New in Phase 2
 
@@ -72,6 +85,8 @@ js/audio/sampler.js         sampled-instrument engine
 js/audio/growl.js           the dog house growl
 js/ui/pianoroll.js          piano roll editor
 js/ui/dock.js               bottom panel, instrument panel, on-screen keyboard
+js/audio/drums.js           drum kits (synthesized voices) + starter beats
+js/ui/drumeditor.js         beat editor (step sequencer)
 samples/                    instrument samples (see samples/CREDITS.txt)
 js/ui/*.js                  timeline, track headers, mixer, modal helpers
 sw.js, manifest.webmanifest PWA (offline + install)
@@ -79,7 +94,6 @@ sw.js, manifest.webmanifest PWA (offline + install)
 
 ## Next phases
 
-3. Drum machine with preset kits
 4. Effects and automation (including tempo automation)
 5. Audio/vocal recording with monitoring and autotune
 6. Sampler

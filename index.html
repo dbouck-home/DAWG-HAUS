@@ -57,7 +57,7 @@
     <div class="group">
       <button id="btn-zoom-out" class="tbtn small" title="Zoom out (Ctrl + scroll)">−</button>
       <button id="btn-zoom-in" class="tbtn small" title="Zoom in (Ctrl + scroll)">+</button>
-      <button id="btn-tab-pianoroll" class="tbtn toggle" title="Piano roll (double-click a clip)">Piano Roll</button>
+      <button id="btn-tab-pianoroll" class="tbtn toggle" title="Piano roll / beat editor (double-click a clip)">Editor</button>
       <button id="btn-tab-instrument" class="tbtn toggle" title="Instrument settings for the selected track">Instrument</button>
       <button id="btn-tab-mixer" class="tbtn toggle" title="Mixer">Mixer</button>
       <button id="btn-tab-keyboard" class="tbtn toggle" title="On-screen keyboard">Keyboard</button>
@@ -83,7 +83,7 @@
   <section id="dock" hidden>
     <div id="dock-resize" title="Drag to resize"></div>
     <div id="dock-tabs" class="dock-tabs"></div>
-    <div class="dock-pane" data-pane="pianoroll" id="pr-root"></div>
+    <div class="dock-pane" data-pane="pianoroll"><div id="pr-root" class="editor-root"></div><div id="beat-root" class="editor-root" hidden></div></div>
     <div class="dock-pane" data-pane="instrument" id="inst-root"></div>
     <div class="dock-pane" data-pane="mixer"><div id="mixer-strips"></div></div>
     <div class="dock-pane" data-pane="keyboard" id="kb-root"></div>

@@ -679,7 +679,7 @@ export class PianoRoll {
   }
 }
 
-function setup(canvas, w, hgt, dpr) {
+export function setup(canvas, w, hgt, dpr) {
   const W = Math.max(1, Math.floor(w * dpr));
   const H = Math.max(1, Math.floor(hgt * dpr));
   if (canvas.width !== W) canvas.width = W;

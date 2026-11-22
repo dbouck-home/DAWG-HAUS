@@ -98,7 +98,7 @@ export class Timeline {
     },
     h('div', { class: 'clip-name' }, clip.name || track.name),
     h('div', { class: 'resize', 'data-resize': '1' }));
-    if (track.type === 'instrument' && clip.notes.length) el.append(this.miniNotes(clip, w, color));
+    if (track.type !== 'audio' && clip.notes.length) el.append(this.miniNotes(clip, w, color));
     return el;
   }
 
@@ -400,7 +400,7 @@ export class Timeline {
       if (clipEl) { this.onOpenClip?.(clipEl.dataset.clip); return; }
       if (!laneEl) return;
       const track = this.store.track(laneEl.dataset.track);
-      if (!track || track.type !== 'instrument') return;
+      if (!track || track.type === 'audio') return;
       const rect = this.rows.getBoundingClientRect();
       const m = this.meter;
       const tick = this.xToTick(e.clientX - rect.left);

@@ -1,6 +1,7 @@
 // Track headers (left column) and mixer strips.
 import { PRESETS, colorForTrack, CATEGORY_COLORS } from '../audio/presets.js';
 import { h, confirmBox } from './dom.js';
+import { KITS } from '../audio/drums.js';
 
 export const fmtDb = (db) => (db <= -60 ? '-∞ dB' : `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`);
 const fmtPan = (p) => (Math.abs(p) < 0.01 ? 'C' : p < 0 ? `L${Math.round(-p * 100)}` : `R${Math.round(p * 100)}`);
@@ -42,7 +43,12 @@ export class TrackHeaders {
       const volLabel = h('span', { class: 'vol-label' }, fmtDb(t.volume));
       const row2 = t.type === 'instrument'
         ? instrumentSelect(t, (v) => this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).instrument = { preset: v, params: {} }; }))
-        : h('span', { class: 'type-tag' }, 'Audio track · recording arrives in Phase 5');
+        : t.type === 'drums'
+          ? h('select', {
+            class: 'kit', title: 'Drum kit', onpointerdown: (e) => e.stopPropagation(),
+            onchange: (e) => this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).drums = { kit: e.target.value, pads: {} }; }),
+          }, KITS.map((k) => h('option', { value: k.id, selected: k.id === t.drums.kit }, k.name)))
+          : h('span', { class: 'type-tag' }, 'Audio track · recording arrives in Phase 5');
       const el = h('div', {
         class: `th ${selected ? 'selected' : ''}`,
         'data-track': t.id,
@@ -53,7 +59,7 @@ export class TrackHeaders {
         h('div', { class: 'row' },
           nameEl,
           this.engine.isLoading(t.id) ? h('span', { class: 'loading-tag', title: 'Downloading instrument samples' }, '⏳') : null,
-          t.type === 'instrument' ? h('span', { class: 'live-ind', title: 'Your MIDI keyboard and computer keyboard play this track' }, '🎹') : null,
+          t.type !== 'audio' ? h('span', { class: 'live-ind', title: 'Your MIDI keyboard and computer keyboard play this track' }, '🎹') : null,
           h('button', { class: `sb m ${t.mute ? 'active' : ''}`, title: 'Mute', onclick: () => this.toggle(t, 'mute') }, 'M'),
           h('button', { class: `sb s ${t.solo ? 'active' : ''}`, title: 'Solo', onclick: () => this.toggle(t, 'solo') }, 'S'),
           h('button', { class: 'sb del', title: 'Delete track', onclick: () => this.remove(t) }, '✕')),
