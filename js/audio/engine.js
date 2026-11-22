@@ -5,6 +5,7 @@ import { Synth } from './synth.js';
 import { effectivePreset } from './presets.js';
 import { Sampler } from './sampler.js';
 import { DrumKit } from './drums.js';
+import { SampleInstrument } from './sampleinst.js';
 import { createFx, updateFx } from './effects.js';
 import { valueAt, activeLane } from '../automation.js';
 import { loadAudio } from '../storage.js';
@@ -183,14 +184,25 @@ export class Engine {
       if (t.type === 'drums') {
         const key = JSON.stringify(t.drums || {});
         if (!(ch.instrument instanceof DrumKit)) {
+          if (ch.instrument instanceof SampleInstrument) ch.presetId = null;
           ch.instrument?.dispose();
           ch.instrument = new DrumKit(this.ctx, t, ch.input);
           ch.presetId = null;
           ch.paramKey = key;
         } else if (key !== ch.paramKey) { ch.instrument.setTrack(t); ch.paramKey = key; }
       }
+      if (t.type === 'sampler') {
+        const key = JSON.stringify(t.sampler || {});
+        if (!(ch.instrument instanceof SampleInstrument)) {
+          ch.instrument?.dispose();
+          ch.instrument = new SampleInstrument(this.ctx, t, ch.input, (id) => this.audioBuffers.get(id) || (this.loadAudioBuffer(id), null));
+          ch.presetId = null;
+          ch.paramKey = key;
+        } else if (key !== ch.paramKey) { ch.instrument.setTrack(t); ch.paramKey = key; }
+        if (t.sampler?.audioId && !this.audioBuffers.has(t.sampler.audioId)) this.loadAudioBuffer(t.sampler.audioId);
+      }
       if (t.type === 'instrument') {
-        if (ch.instrument instanceof DrumKit) { ch.instrument.dispose(); ch.instrument = null; ch.presetId = null; }
+        if (ch.instrument instanceof DrumKit || ch.instrument instanceof SampleInstrument) { ch.instrument.dispose(); ch.instrument = null; ch.presetId = null; }
         const pid = t.instrument?.preset;
         const pr = effectivePreset(t);
         if (ch.presetId !== pid) {
@@ -604,7 +616,36 @@ export class Engine {
     return true;
   }
 
+  /** Record a sample from the mic (no transport needed). Resolves with { data, sampleRate } on stop. */
+  startSampleRecording() {
+    if (!this.input) return false;
+    this.sampleRec = { chunks: [], t0: null, startTime: this.ctx.currentTime + 0.02 };
+    this.sampleRec.done = new Promise((res) => { this.sampleRec.resolve = res; });
+    this.input.recorder.port.postMessage({ cmd: 'start' });
+    return this.sampleRec.done;
+  }
+
+  stopSampleRecording() {
+    if (!this.sampleRec) return;
+    this.input?.recorder.port.postMessage({ cmd: 'stop' });
+  }
+
   onRecorderMessage(m) {
+    if (this.sampleRec) {
+      const r = this.sampleRec;
+      if (m.type === 'started') r.t0 = m.time;
+      else if (m.type === 'data') r.chunks.push(m.data);
+      else if (m.type === 'stopped') {
+        this.sampleRec = null;
+        let total = 0;
+        for (const c of r.chunks) total += c.length;
+        const all = new Float32Array(total);
+        let o = 0;
+        for (const c of r.chunks) { all.set(c, o); o += c.length; }
+        r.resolve({ data: all, sampleRate: this.ctx.sampleRate });
+      }
+      return;
+    }
     const r = this.audioRec;
     if (!r) return;
     if (m.type === 'started') r.t0 = m.time;

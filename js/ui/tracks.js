@@ -22,10 +22,11 @@ function instrumentSelect(track, onChange) {
 }
 
 export class TrackHeaders {
-  constructor({ store, engine, onShowFx }) {
+  constructor({ store, engine, onShowFx, onShowInstrument }) {
     this.store = store;
     this.engine = engine;
     this.onShowFx = onShowFx;
+    this.onShowInstrument = onShowInstrument;
     this.el = document.getElementById('track-headers');
     this.meters = new Map();
   }
@@ -102,7 +103,10 @@ export class TrackHeaders {
             class: 'kit', title: 'Drum kit', onpointerdown: (e) => e.stopPropagation(),
             onchange: (e) => this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).drums = { kit: e.target.value, pads: {} }; }),
           }, KITS.map((k) => h('option', { value: k.id, selected: k.id === t.drums.kit }, k.name)))
-          : h('span', { class: 'type-tag' },
+          : t.type === 'sampler'
+            ? h('button', { class: 'pbtn smp-btn', title: 'Open the sampler settings', onclick: (e) => { e.stopPropagation(); this.onShowInstrument?.(t.id); } },
+              t.sampler?.audioId ? `🎛 ${t.sampler.name || 'Sample'} — edit` : '🎛 Load a sound…')
+            : h('span', { class: 'type-tag' },
             h('button', {
               class: `sb mon ${t.input?.monitor ? 'active' : ''}`, title: 'Monitoring: hear yourself through this track (use headphones)',
               onclick: (e) => { e.stopPropagation(); this.store.mutate((p) => { const x = p.tracks.find((y) => y.id === t.id); x.input = { ...(x.input || {}), monitor: !x.input?.monitor }; }); },

@@ -2,6 +2,7 @@
 import { PPQ } from './timing.js';
 import { getPreset } from './audio/presets.js';
 import { getKit, PATTERNS } from './audio/drums.js';
+import { SAMPLER_DEFAULTS } from './audio/sampleinst.js';
 
 export const PROJECT_VERSION = 1;
 
@@ -12,6 +13,7 @@ export function uid(prefix = 'id') {
 export function baseLabel(track) {
   if (track.type === 'audio') return 'Audio';
   if (track.type === 'drums') return getKit(track.drums?.kit).name;
+  if (track.type === 'sampler') return track.sampler?.name ? `Sampler · ${track.sampler.name}` : 'Sampler';
   return getPreset(track.instrument?.preset).name;
 }
 
@@ -46,6 +48,7 @@ export function newTrack(type = 'instrument', preset = 'soft-keys') {
   };
   if (type === 'instrument') t.instrument = { preset, params: {} };
   if (type === 'drums') t.drums = { kit: preset || '808', pads: {} };
+  if (type === 'sampler') t.sampler = { ...SAMPLER_DEFAULTS };
   return t;
 }
 

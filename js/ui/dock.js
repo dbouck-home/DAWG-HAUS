@@ -2,7 +2,9 @@
 import { PRESETS, CATEGORY_COLORS, getPreset, paramDefs, paramValue, colorForTrack } from '../audio/presets.js';
 import { KEYMAP } from '../midi.js';
 import { KITS, getKit, PAD_PARAMS, padSetting } from '../audio/drums.js';
-import { noteName } from '../timing.js';
+import { noteName, TempoMap } from '../timing.js';
+import { SAMPLER_DEFAULTS, detectTrim, detectPitch } from '../audio/sampleinst.js';
+import { saveAudio } from '../storage.js';
 import { h } from './dom.js';
 
 export const DOCK_TABS = [
@@ -99,6 +101,7 @@ export class InstrumentPanel {
     this.root.innerHTML = '';
     if (t?.type === 'drums') { this.renderDrums(t); return; }
     if (t?.type === 'audio') { this.renderAudio(t); return; }
+    if (t?.type === 'sampler') { this.renderSampler(t); return; }
     if (!t || t.type !== 'instrument') {
       this.root.append(h('div', { class: 'pane-empty' }, t ? 'Audio tracks get their settings in Phase 5.' : 'Select an instrument track.'));
       return;
@@ -242,6 +245,176 @@ InstrumentPanel.prototype.renderAudio = function renderAudio(t) {
     h('div', { class: 'inst-head' },
       h('span', { class: 'dot', style: { background: colorForTrack(t) } }), h('b', {}, t.name),
       h('span', { class: 'muted' }, eng.input ? ` · 🎙 ${eng.input.label}` : ' · microphone off')),
+    h('div', { class: 'inst-body' }, left, right));
+};
+
+// ---------- sampler ----------
+InstrumentPanel.prototype.renderSampler = function renderSampler(t) {
+  const eng = this.engine;
+  const s = { ...SAMPLER_DEFAULTS, ...(t.sampler || {}) };
+  const set = (patch, opts) => this.store.mutate((pp) => {
+    const x = pp.tracks.find((y) => y.id === t.id);
+    x.sampler = { ...SAMPLER_DEFAULTS, ...(x.sampler || {}), ...patch };
+  }, opts);
+
+  // store a new sound and point the sampler at it
+  const useSound = async (data, sampleRate, name) => {
+    const audioId = `aud_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    await saveAudio({ id: audioId, sampleRate, data });
+    const buf = eng.ctx.createBuffer(1, data.length, sampleRate);
+    buf.copyToChannel(data, 0);
+    eng.audioBuffers.set(audioId, buf);
+    const trim = detectTrim(buf);
+    const root = detectPitch(buf, trim.start, trim.end) ?? 60;
+    set({ audioId, name, start: trim.start, end: trim.end, root });
+  };
+
+  const left = h('div', { class: 'inst-right' });
+  // --- sources ---
+  const recBtn = h('button', { class: 'pbtn' }, '🎙 Record a sound');
+  let recTimer = null;
+  recBtn.onclick = async () => {
+    if (eng.sampleRec) { eng.stopSampleRecording(); return; }
+    try {
+      const devId = this.store.project.tracks.find((x) => x.type === 'audio' && x.input?.deviceId)?.input.deviceId;
+      await eng.openInput(devId);
+    } catch (e) { alert(`The microphone could not be opened: ${e.message}`); return; }
+    const t0 = Date.now();
+    recBtn.classList.add('recording');
+    recTimer = setInterval(() => {
+      const sec = (Date.now() - t0) / 1000;
+      recBtn.textContent = `■ Stop recording (${sec.toFixed(1)} s)`;
+      if (sec > 60) eng.stopSampleRecording();
+    }, 100);
+    const res = await eng.startSampleRecording();
+    clearInterval(recTimer);
+    if (res && res.data.length > res.sampleRate * 0.05) await useSound(res.data, res.sampleRate, 'Recording');
+    else this.render();
+  };
+  const fileIn = h('input', { type: 'file', accept: 'audio/*,.wav,.mp3,.ogg,.m4a,.flac', hidden: true });
+  fileIn.onchange = async () => {
+    const f = fileIn.files?.[0];
+    if (!f) return;
+    try {
+      eng.ensureContext();
+      const buf = await eng.ctx.decodeAudioData(await f.arrayBuffer());
+      const mono = new Float32Array(buf.length);
+      for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) mono[i] += d[i] / buf.numberOfChannels; }
+      await useSound(mono, buf.sampleRate, f.name.replace(/\.[^.]+$/, '').slice(0, 30));
+    } catch (e) { alert('That file could not be read as audio.'); }
+  };
+  const takes = [];
+  for (const tr of this.store.project.tracks) for (const c of tr.clips) if (c.audioId) takes.push({ tr, c });
+  const takeSel = h('select', {
+    title: 'Use part of a recording from an audio track',
+    onchange: (e) => {
+      const tk = takes[+e.target.value];
+      e.target.value = '';
+      if (!tk) return;
+      const tm = new TempoMap(this.store.project.tempos);
+      const secs = tm.tickToSec(tk.c.start + tk.c.length) - tm.tickToSec(tk.c.start);
+      set({ audioId: tk.c.audioId, name: tk.c.name || 'Take', start: tk.c.srcOffset || 0, end: (tk.c.srcOffset || 0) + secs });
+    },
+  }, h('option', { value: '' }, takes.length ? 'Use a recorded take…' : 'No recorded takes yet'), takes.map((tk, i) => h('option', { value: String(i) }, `${tk.tr.name} · ${tk.c.name || 'Take'}`)));
+  left.append(h('div', { class: 'pgroup wrap' }, recBtn, h('button', { class: 'pbtn', onclick: () => fileIn.click() }, '📁 Import audio file'), takeSel, fileIn));
+
+  // --- waveform with start / end markers ---
+  const cv = h('canvas', { class: 'smp-wave' });
+  const buf = s.audioId ? eng.audioBuffers.get(s.audioId) : null;
+  if (s.audioId && !buf) eng.loadAudioBuffer(s.audioId)?.then(() => this.render());
+  const drawWave = (st = s.start, en = s.end) => {
+    const W = cv.clientWidth || 500;
+    const H = 130;
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.fillStyle = '#0b0d10'; g.fillRect(0, 0, W, H);
+    if (!buf) {
+      g.fillStyle = '#8b93a3'; g.font = '13px system-ui, sans-serif';
+      g.fillText(s.audioId ? 'Loading…' : 'Record a sound, import a file, or pick a recorded take to start.', 12, H / 2);
+      return;
+    }
+    const pk = eng.peaks(s.audioId, 256);
+    const dur = buf.duration;
+    const n = pk.data.length / 2;
+    const x0 = (st / dur) * W; const x1 = ((en > st ? en : dur) / dur) * W;
+    g.fillStyle = 'rgba(123,175,212,0.12)'; g.fillRect(x0, 0, x1 - x0, H);
+    for (let x = 0; x < W; x++) {
+      const i0 = Math.floor((x / W) * n); const i1 = Math.max(i0 + 1, Math.floor(((x + 1) / W) * n));
+      let lo = 0; let hi = 0;
+      for (let i = i0; i < i1 && i < n; i++) { lo = Math.min(lo, pk.data[i * 2]); hi = Math.max(hi, pk.data[i * 2 + 1]); }
+      g.fillStyle = x >= x0 && x <= x1 ? '#7bafd4' : '#3a414e';
+      g.fillRect(x, H / 2 - hi * H / 2, 1, Math.max(1, (hi - lo) * H / 2));
+    }
+    for (const [x, lab] of [[x0, 'START'], [x1, 'END']]) {
+      g.fillStyle = '#e6f2fa'; g.fillRect(x - 1, 0, 2, H);
+      g.fillRect(lab === 'START' ? x : x - 40, 0, 40, 14);
+      g.fillStyle = '#06121c'; g.font = 'bold 9px system-ui, sans-serif';
+      g.fillText(lab, lab === 'START' ? x + 5 : x - 35, 10);
+    }
+    g.fillStyle = '#8b93a3'; g.font = '11px system-ui, sans-serif';
+    g.fillText(`${(en - st).toFixed(2)} s of ${dur.toFixed(2)} s${s.loop ? ' · loops between the markers' : ''}`, 8, H - 8);
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    if (!buf) return;
+    const rect = cv.getBoundingClientRect();
+    const dur = buf.duration;
+    const secAt = (cx) => Math.max(0, Math.min(dur, ((cx - rect.left) / rect.width) * dur));
+    const end0 = s.end > s.start ? s.end : dur;
+    const sx = (s.start / dur) * rect.width; const ex = (end0 / dur) * rect.width;
+    const x = e.clientX - rect.left;
+    const which = Math.abs(x - sx) <= Math.abs(x - ex) ? 'start' : 'end';
+    let st = s.start; let en = end0;
+    cv.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      const v = secAt(ev.clientX);
+      if (which === 'start') st = Math.min(v, en - 0.01); else en = Math.max(v, st + 0.01);
+      drawWave(st, en);
+    };
+    move(e);
+    const up = () => { cv.removeEventListener('pointermove', move); cv.removeEventListener('pointerup', up); set({ start: st, end: en }); };
+    cv.addEventListener('pointermove', move);
+    cv.addEventListener('pointerup', up);
+  });
+  left.append(cv,
+    h('div', { class: 'pgroup wrap' },
+      h('button', { class: 'pbtn accent', disabled: !buf, onclick: () => eng.preview(t.id, s.root, 110, 1.5) }, '▶ Preview'),
+      h('button', { class: 'pbtn', disabled: !buf, title: 'Move the markers to where the sound starts and ends', onclick: () => { const tr = detectTrim(buf); set({ start: tr.start, end: tr.end }); } }, '✂ Auto-trim'),
+      h('button', {
+        class: 'pbtn', disabled: !buf, title: 'Detect the sound\u2019s pitch so the keyboard plays it in tune',
+        onclick: () => { const p = detectPitch(buf, s.start, s.end > s.start ? s.end : buf.duration); if (p != null) set({ root: p }); else alert('No clear pitch found — set the root note by hand.'); },
+      }, '🎯 Detect pitch')),
+    h('div', { class: 'hint' }, 'Drag the START and END markers on the waveform to choose the part that plays.'));
+  requestAnimationFrame(() => drawWave());
+
+  // --- settings ---
+  const rootSel = h('select', { onchange: (e) => set({ root: +e.target.value }) });
+  for (let p = 24; p <= 96; p++) rootSel.append(h('option', { value: p, selected: p === s.root }, noteName(p)));
+  const slider = (label, key, min, max, step, fmt) => {
+    const lab = h('span', { class: 'pval' }, fmt(s[key]));
+    return h('div', { class: 'prow' }, h('span', { class: 'plabel' }, label),
+      h('input', { type: 'range', min, max, step, value: s[key], oninput: (e) => { const v = +e.target.value; lab.textContent = fmt(v); set({ [key]: v }, { merge: `smp:${t.id}:${key}`, silent: true }); } }), lab);
+  };
+  const ms = (v) => (v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`);
+  const right = h('div', { class: 'inst-right' },
+    h('div', { class: 'prow' }, h('span', { class: 'plabel', title: 'The key that plays the sound at its original pitch' }, 'Root note'), rootSel, h('span')),
+    h('div', { class: 'prow' }, h('span', { class: 'plabel' }, 'Play mode'),
+      h('select', { onchange: (e) => set({ mode: e.target.value }) },
+        h('option', { value: 'pitched', selected: s.mode === 'pitched' }, 'Pitched — keys change the pitch'),
+        h('option', { value: 'oneshot', selected: s.mode === 'oneshot' }, 'One-shot — same sound on every key')), h('span')),
+    h('label', { class: 'prow chkrow' }, h('span', { class: 'plabel' }, 'Loop'), h('span', { class: 'chk' }, h('input', { type: 'checkbox', checked: s.loop, onchange: (e) => set({ loop: e.target.checked }) }), ' repeat between the markers while a key is held'), h('span')),
+    h('label', { class: 'prow chkrow' }, h('span', { class: 'plabel' }, 'Reverse'), h('span', { class: 'chk' }, h('input', { type: 'checkbox', checked: s.reverse, onchange: (e) => set({ reverse: e.target.checked }) }), ' play the sound backwards'), h('span')),
+    slider('Attack', 'attack', 0.001, 2, 0.001, ms),
+    slider('Release', 'release', 0.01, 4, 0.01, ms),
+    slider('Gain', 'gain', -24, 12, 0.5, (v) => `${v > 0 ? '+' : ''}${(+v).toFixed(1)} dB`),
+    h('div', { class: 'hint' }, 'Play the sample on your MIDI keyboard, the computer keys, the Keyboard tab, or draw notes in the piano roll. Add effects in the Effects tab.'));
+  this.root.append(
+    h('div', { class: 'inst-head' },
+      h('span', { class: 'dot', style: { background: colorForTrack(t) } }), h('b', {}, t.name),
+      h('span', { class: 'muted' }, s.audioId ? ` · root ${noteName(s.root)} · ${s.mode === 'pitched' ? 'pitched' : 'one-shot'}` : ' · no sound loaded yet'),
+      h('div', { class: 'spacer' }),
+      s.name ? h('input', { class: 'smp-name', value: s.name, title: 'Sample name (the track is named after it)', onchange: (e) => set({ name: e.target.value.slice(0, 30) }) }) : null),
     h('div', { class: 'inst-body' }, left, right));
 };
 

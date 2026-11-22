@@ -1,4 +1,4 @@
-# DAWG HAUS — Phase 5
+# DAWG HAUS — Phase 6
 
 A browser-based digital audio workstation (PWA) for Windows 11 and Chromebooks.
 Plain HTML/CSS/JavaScript with no build step: upload the folder to any static host and it runs.
@@ -20,6 +20,13 @@ Opening `index.html` directly from disk will **not** work, because browsers bloc
 
 Upload the changed files, then raise `VERSION` in `sw.js` (for example `dawghaus-v0.2.1`).
 Installed copies pick up the update the next time they're opened.
+
+## New in Phase 6
+
+- Sampler tracks (+ Add Track → Sampler): get a sound by recording it from the mic, importing an audio file (WAV, MP3, OGG, M4A, FLAC), or picking a recorded take from an audio track
+- The sound is trimmed to where it starts and ends, and its pitch is detected so the keys play it in tune
+- Drag the START / END markers on the waveform; set the root note, Pitched (keys change pitch) or One-shot mode, Loop, Reverse, Attack, Release and Gain
+- Play it on a MIDI keyboard, the computer keys, the Keyboard tab, or draw notes in the piano roll; record it like any instrument
 
 ## New in Phase 5
 
@@ -127,5 +134,4 @@ sw.js, manifest.webmanifest PWA (offline + install)
 
 ## Next phases
 
-6. Sampler
 7. WAV/MP3 export

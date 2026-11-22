@@ -30,7 +30,11 @@ async function boot() {
   const engine = new Engine(() => store.project);
   Object.assign(store.ui, { dockOpen: false, dockTab: 'pianoroll', dockHeight: 340 });
   const timeline = new Timeline({ store, engine, onEditMeter: (bar) => meterDialog(bar), onOpenClip: (id) => openClip(id) });
-  const headers = new TrackHeaders({ store, engine, onShowFx: (id) => { store.setUI({ selectedTrackId: id }); fxPanel.target = 'track'; dock.show('effects'); } });
+  const headers = new TrackHeaders({
+    store, engine,
+    onShowFx: (id) => { store.setUI({ selectedTrackId: id }); fxPanel.target = 'track'; dock.show('effects'); },
+    onShowInstrument: (id) => { store.setUI({ selectedTrackId: id }); dock.show('instrument'); },
+  });
   const mixer = new Mixer({ store, engine });
   const pianoRoll = new PianoRoll({ store, engine, root: $('pr-root') });
   const beatEditor = new BeatEditor({ store, engine, root: $('beat-root') });
@@ -339,11 +343,15 @@ async function boot() {
         h('small', {}, `drum machine · ${k.pads.length} pads`)));
     }
     body.prepend(h('div', { class: 'section-label' }, 'Drums'), drumGrid);
+    body.append(h('div', { class: 'section-label' }, 'Sampler'), h('div', { class: 'choice-grid' },
+      h('button', { class: 'choice', onclick: () => { add('sampler'); dock.show('instrument'); } },
+        h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Sampler } }), 'Sampler'),
+        h('small', {}, 'record or import a sound, play it on the keys'))));
     body.append(h('div', { class: 'section-label' }, 'Audio'), h('div', { class: 'choice-grid' },
       h('button', { class: 'choice', onclick: () => add('audio') },
         h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Audio } }), 'Audio Track'),
         h('small', {}, 'vocals & mics · recording in Phase 5'))),
-      h('div', { class: 'hint', style: { marginTop: '10px' } }, 'The sampler arrives in Phase 6.'));
+      h('div', { class: 'hint', style: { marginTop: '10px' } }, ''));
     closeFn = openModal({ title: 'Add a track', body, buttons: [{ label: 'Cancel' }], width: '720px' });
   };
 

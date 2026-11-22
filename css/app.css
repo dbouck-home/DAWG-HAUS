@@ -379,3 +379,11 @@ button { cursor: pointer; }
 .prow select { background: #0b0d10; border: 1px solid var(--line2); border-radius: 5px; padding: 3px; min-width: 0; }
 .th .mon { font-size: 11px; }
 .th .mon.active { background: #2f6d4a; border-color: #46d07a; }
+
+.smp-wave { width: 100%; height: 130px; border-radius: 8px; cursor: ew-resize; display: block; }
+.pgroup.wrap { flex-wrap: wrap; gap: 6px; }
+.pgroup select { background: #0b0d10; border: 1px solid var(--line2); border-radius: 6px; font-size: 12px; padding: 3px 6px; }
+.pbtn.recording { background: var(--rec); border-color: var(--rec); color: #fff; animation: pulse 1s infinite; }
+.pbtn:disabled { opacity: .4; cursor: default; }
+.smp-name { background: #0b0d10; border: 1px solid var(--line2); border-radius: 6px; padding: 3px 8px; width: 180px; }
+.th .smp-btn { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
