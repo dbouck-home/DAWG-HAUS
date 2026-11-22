@@ -23,7 +23,9 @@ Installed copies pick up the update the next time they're opened.
 
 ## Recent improvements
 
-- ⟳ Repeat button on every MIDI and drum clip: click to play the section one more time, drag it right to repeat as long as you like, or Shift-click to repeat to the end of the song. Editing the clip changes every repeat.
+- ⟳ Repeat button on every MIDI and drum clip: click to play the section one more time; drag it right or left to repeat more or less (drag back to remove repeats, stop partway for half a repeat); Shift-click repeats to the end of the song; right-click for a menu (remove repeats, add half a repeat, double…). Editing the clip changes every repeat.
+- Bigger loop strip at the top of the ruler: drag its ends to resize, drag the middle to move it, drag empty space for a new loop, click it to turn looping on/off
+- Piano roll keys are narrower and rows shorter so more octaves fit; ↕−/↕+ change the row height (or Shift+Ctrl+scroll)
 - Ctrl+S splits clips at the playhead (the selected clip, or every clip under the playhead on the selected track). Songs still save automatically.
 - Piano roll: double-click to add a note; drag empty space to select notes
 

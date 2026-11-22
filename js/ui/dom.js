@@ -97,3 +97,23 @@ export function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.textContent = ''; }, 4000);
 }
+
+/** Small popup menu at screen x/y. items: [{ label, onClick, disabled }] or '-' for a divider. */
+export function popupMenu(x, y, items) {
+  document.querySelector('.popmenu')?.remove();
+  const menu = h('div', { class: 'popmenu' });
+  for (const it of items) {
+    if (it === '-') { menu.append(h('div', { class: 'popsep' })); continue; }
+    menu.append(h('button', {
+      class: 'popitem', disabled: it.disabled,
+      onclick: () => { menu.remove(); it.onClick(); },
+    }, it.label, it.hint ? h('small', {}, it.hint) : null));
+  }
+  document.body.append(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(x, window.innerWidth - r.width - 8)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - r.height - 8)}px`;
+  const close = (e) => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('pointerdown', close, true); } };
+  setTimeout(() => document.addEventListener('pointerdown', close, true), 0);
+  return menu;
+}

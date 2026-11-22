@@ -2,10 +2,11 @@
 import { PPQ, MeterMap } from '../timing.js';
 import { colorForTrack } from '../audio/presets.js';
 import { newClip, patternLength, expandNotes, repeatCount } from '../project.js';
-import { h } from './dom.js';
+import { h, popupMenu } from './dom.js';
 import { AUTO_H, laneData, drawLane, bindLaneRow } from './autolanes.js';
 
-const LOOP_STRIP = 15;
+const LOOP_STRIP = 22;
+const RULER_H = 54;
 
 export class Timeline {
   constructor({ store, engine, onEditMeter, onOpenClip }) {
@@ -116,7 +117,7 @@ export class Timeline {
     if (track.type !== 'audio') {
       el.append(h('div', {
         class: 'repeat', 'data-repeat': '1',
-        title: 'Repeat: click to play this section one more time, or drag to the right to repeat it as long as you like (Shift-click = repeat to the end of the song)',
+        title: 'Repeat · click: one more time · drag right/left: repeat more or less (drag back to remove repeats, stop halfway for half a repeat) · Shift-click: to the end of the song · right-click: more options',
       }, '⟳'));
     }
     return el;
@@ -151,7 +152,7 @@ export class Timeline {
     const { project, ui } = this.store;
     let contentH = project.tracks.length * this.laneH + (ui.showTempo ? AUTO_H : 0);
     for (const t of project.tracks) if (t.showAuto) contentH += (t.automation || []).length * AUTO_H;
-    const lanesH = Math.max(contentH, this.arrange.clientHeight - 44);
+    const lanesH = Math.max(contentH, this.arrange.clientHeight - RULER_H);
     this.lanes.style.height = `${lanesH}px`;
     // update clip positions (cheap) without rebuilding
     this.drawStatic();
@@ -213,19 +214,13 @@ export class Timeline {
 
     // ---- ruler ----
     const rc = this.rulerCanvas;
-    const RH = 44;
+    const RH = RULER_H;
     rc.width = Math.floor(w * dpr); rc.height = Math.floor(RH * dpr);
     rc.style.width = `${w}px`; rc.style.height = `${RH}px`; rc.style.left = `${x0}px`;
     const r = rc.getContext('2d');
     r.setTransform(dpr, 0, 0, dpr, 0, 0);
     r.clearRect(0, 0, w, RH);
-    r.fillStyle = '#14171c';
-    r.fillRect(0, 0, w, LOOP_STRIP);
-    // loop region
-    const lx = p.loop.start * ppt - x0;
-    const lw = (p.loop.end - p.loop.start) * ppt;
-    r.fillStyle = p.loop.enabled ? 'rgba(255,122,47,0.75)' : 'rgba(140,150,165,0.35)';
-    r.fillRect(lx, 2, lw, LOOP_STRIP - 4);
+    this.drawLoopStrip(r, w, x0, ppt, p.loop);
 
     // bar numbers
     const minLabelPx = 34;
@@ -250,7 +245,7 @@ export class Timeline {
       }
       if (bx - lastLabelX >= minLabelPx) {
         r.fillStyle = '#c9ced8';
-        r.fillText(String(bar + 1), bx + 4, 24);
+        r.fillText(String(bar + 1), bx + 4, LOOP_STRIP + 11);
         lastLabelX = bx;
       }
       const isChange = p.meters.some((mm) => mm.bar === bar);
@@ -258,9 +253,9 @@ export class Timeline {
         const label = `${seg.num}/${seg.den}${seg.groups ? ` (${seg.group})` : ''}`;
         const tw = r.measureText(label).width + 8;
         r.fillStyle = '#3b2a1e';
-        r.fillRect(bx + 1, 30, tw, 13);
+        r.fillRect(bx + 1, RH - 15, tw, 13);
         r.fillStyle = '#ffb36b';
-        r.fillText(label, bx + 5, 37);
+        r.fillText(label, bx + 5, RH - 8);
         this.meterMarkers.push({ bar, x: bx + x0, w: tw });
       }
     }
@@ -301,8 +296,120 @@ export class Timeline {
     this.rows.querySelectorAll('.clip').forEach((c) => c.classList.toggle('selected', c.dataset.clip === selectedClipId));
   }
 
+  // ---------- loop strip ----------
+  drawLoopStrip(r, w, x0, ppt, loop) {
+    const H = LOOP_STRIP;
+    r.fillStyle = '#0f1216';
+    r.fillRect(0, 0, w, H);
+    r.fillStyle = '#2a303a';
+    r.fillRect(0, H - 1, w, 1);
+    const has = loop.end > loop.start;
+    const lx = loop.start * ppt - x0;
+    const lw = (loop.end - loop.start) * ppt;
+    r.font = '600 11px system-ui, sans-serif';
+    r.textBaseline = 'middle';
+    if (!has) {
+      r.fillStyle = '#6b7383';
+      r.fillText('⟲ Drag here to set a loop', 8, H / 2);
+      return;
+    }
+    const on = loop.enabled;
+    // region
+    r.fillStyle = on ? '#ff7a2f' : '#3a404c';
+    r.beginPath();
+    r.roundRect ? r.roundRect(lx, 2, lw, H - 4, 5) : r.rect(lx, 2, lw, H - 4);
+    r.fill();
+    if (!on) {
+      r.strokeStyle = '#8b93a3';
+      r.setLineDash([4, 3]);
+      r.strokeRect(lx + 0.5, 2.5, lw - 1, H - 5);
+      r.setLineDash([]);
+    }
+    // grab handles at both ends
+    for (const hx of [lx, lx + lw - 8]) {
+      r.fillStyle = on ? '#b84d10' : '#252a33';
+      r.fillRect(hx, 2, 8, H - 4);
+      r.fillStyle = on ? '#ffd2b0' : '#8b93a3';
+      r.fillRect(hx + 2.5, 6, 1, H - 12);
+      r.fillRect(hx + 4.5, 6, 1, H - 12);
+    }
+    // label
+    const m = this.meter;
+    const b1 = +(m.tickToBar(loop.start) + 1).toFixed(2);
+    const b2 = +(m.tickToBar(loop.end) + 1).toFixed(2);
+    const full = on ? `⟲ Loop bars ${b1}–${b2} · click to turn off · drag the ends to resize` : `⟲ Loop off (bars ${b1}–${b2}) · click to turn on`;
+    const short = on ? `⟲ ${b1}–${b2}` : '⟲ off';
+    r.fillStyle = on ? '#1a0d04' : '#c9ced8';
+    const avail = lw - 24;
+    const text = r.measureText(full).width <= avail ? full : r.measureText(short).width <= avail ? short : '';
+    if (text) r.fillText(text, Math.max(lx + 12, Math.min(lx + 12, w)), H / 2 + 0.5);
+  }
+
+  loopZone(x) {
+    const loop = this.store.project.loop;
+    if (!(loop.end > loop.start)) return 'outside';
+    const lx = this.tickToX(loop.start);
+    const rx = this.tickToX(loop.end);
+    if (Math.abs(x - lx) <= 9 && x < (lx + rx) / 2) return 'start';
+    if (Math.abs(x - rx) <= 9) return 'end';
+    if (x > lx && x < rx) return 'inside';
+    return 'outside';
+  }
+
+  /** Loop strip: drag the ends to resize, drag the middle to move, drag elsewhere for a new loop, click to toggle. */
+  loopDrag(e, rect) {
+    const m = this.meter;
+    const snapOpt = this.store.ui.snap === 'off' ? 'beat' : this.store.ui.snap;
+    const sn = (t) => m.snap(Math.max(0, t), snapOpt);
+    const x = e.clientX - rect.left;
+    const zone = this.loopZone(x);
+    const orig = { ...this.store.project.loop };
+    const t0 = this.xToTick(x);
+    let next = { ...orig };
+    let moved = false;
+    this.ruler.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      const xx = ev.clientX - rect.left;
+      if (Math.abs(xx - x) > 3) moved = true;
+      if (!moved) return;
+      const t = this.xToTick(xx);
+      if (zone === 'start') next = { ...orig, enabled: true, start: Math.min(sn(t), orig.end - 1) };
+      else if (zone === 'end') next = { ...orig, enabled: true, end: Math.max(sn(t), orig.start + 1) };
+      else if (zone === 'inside') {
+        const len = orig.end - orig.start;
+        const ns = sn(orig.start + (t - t0));
+        next = { ...orig, enabled: true, start: ns, end: ns + len };
+      } else {
+        const a = sn(Math.min(t0, t)); const b = sn(Math.max(t0, t));
+        next = { enabled: true, start: a, end: Math.max(b, a + 1) };
+      }
+      // keep a sensible minimum (one snap step)
+      if (next.end - next.start < 30) next.end = next.start + m.gridTicksAt(next.start, snapOpt);
+      this.store.project.loop = next;
+      this.drawStatic();
+    };
+    const up = () => {
+      this.ruler.removeEventListener('pointermove', move);
+      this.ruler.removeEventListener('pointerup', up);
+      this.store.project.loop = orig; // so undo restores the previous loop
+      if (moved) this.store.mutate((p) => { p.loop = next; });
+      else if (zone === 'inside' || zone === 'start' || zone === 'end') this.store.mutate((p) => { p.loop.enabled = !p.loop.enabled; });
+      else this.store.emit('project');
+    };
+    this.ruler.addEventListener('pointermove', move);
+    this.ruler.addEventListener('pointerup', up);
+  }
+
   // ---------- ruler interaction ----------
   bindRuler() {
+    this.ruler.addEventListener('pointermove', (e) => {
+      if (e.buttons) return;
+      const rect = this.ruler.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      if (e.clientY - rect.top >= LOOP_STRIP) { this.ruler.style.cursor = 'pointer'; return; }
+      const z = this.loopZone(x);
+      this.ruler.style.cursor = z === 'start' || z === 'end' ? 'ew-resize' : z === 'inside' ? 'grab' : 'crosshair';
+    });
     this.ruler.addEventListener('pointerdown', (e) => {
       const rect = this.ruler.getBoundingClientRect();
       const x = e.clientX - rect.left; // ruler element starts at lane x=0
@@ -310,30 +417,8 @@ export class Timeline {
       const tick = this.xToTick(x);
       const m = this.meter;
       const snap = this.store.ui.snap;
-      if (y < LOOP_STRIP) {
-        const start = m.snap(tick, snap === 'off' ? 'beat' : snap);
-        let endTick = start;
-        const origLoop = { ...this.store.project.loop };
-        this.ruler.setPointerCapture(e.pointerId);
-        const move = (ev) => {
-          const t = m.snap(this.xToTick(ev.clientX - rect.left), snap === 'off' ? 'beat' : snap);
-          endTick = t;
-          const a = Math.min(start, t); const b = Math.max(start, t);
-          if (b > a) { this.store.project.loop = { ...this.store.project.loop, start: a, end: b, enabled: true }; this.drawStatic(); }
-        };
-        const up = () => {
-          this.ruler.removeEventListener('pointermove', move);
-          this.ruler.removeEventListener('pointerup', up);
-          const a = Math.min(start, endTick); const b = Math.max(start, endTick);
-          this.store.project.loop = origLoop; // so undo restores the previous loop
-          if (b > a) this.store.mutate((p) => { p.loop = { enabled: true, start: a, end: b }; });
-          else this.store.emit('project');
-        };
-        this.ruler.addEventListener('pointermove', move);
-        this.ruler.addEventListener('pointerup', up);
-        return;
-      }
-      const marker = this.meterMarkers.find((mk) => x >= mk.x && x <= mk.x + mk.w && y >= 28);
+      if (y < LOOP_STRIP) { this.loopDrag(e, rect); return; }
+      const marker = this.meterMarkers.find((mk) => x >= mk.x && x <= mk.x + mk.w && y >= RULER_H - 17);
       if (marker) { this.onEditMeter(marker.bar); return; }
       const setPos = (cx) => this.engine.setPosition(m.snap(this.xToTick(cx - rect.left), snap === 'off' ? 'off' : 'beat'));
       setPos(e.clientX);
@@ -345,10 +430,7 @@ export class Timeline {
     });
     this.ruler.addEventListener('dblclick', (e) => {
       const rect = this.ruler.getBoundingClientRect();
-      if (e.clientY - rect.top < LOOP_STRIP) {
-        this.store.mutate((p) => { p.loop.enabled = !p.loop.enabled; });
-        return;
-      }
+      if (e.clientY - rect.top < LOOP_STRIP) return;
       const bar = Math.floor(this.meter.tickToBar(this.xToTick(e.clientX - rect.left)));
       this.onEditMeter(bar);
     });
@@ -365,46 +447,87 @@ export class Timeline {
     return -1;
   }
 
-  /** Drag the ⟳ handle to repeat a clip; a click adds one repeat; Shift-click fills to the song end. */
+  /**
+   * The ⟳ repeat handle.
+   * Click: one more repeat · drag right/left: repeat more or less (stops at the snap grid, with a pull toward
+   * whole repeats; drag all the way back to remove repeats) · Shift-click: to the end of the song ·
+   * right-click: menu (remove repeats, half repeat, double, …).
+   */
   repeatDrag(e, clipEl, clip, track) {
     e.stopPropagation();
+    if (e.button === 2) return;
     const L = patternLength(clip);
     const startX = e.clientX;
     const origLen = clip.length;
+    const m = this.meter;
+    const snapOpt = this.store.ui.snap === 'off' ? 'beat' : this.store.ui.snap;
     let newLen = origLen;
     let moved = false;
     const el = e.target;
     el.setPointerCapture(e.pointerId);
+    const label = h('div', { class: 'rep-tip' });
+    clipEl.append(label);
     const move = (ev) => {
       if (Math.abs(ev.clientX - startX) > 3) moved = true;
       if (!moved) return;
       const raw = origLen + this.xToTick(ev.clientX - startX);
-      // whole repeats only
-      newLen = Math.max(L, Math.round(raw / L) * L);
+      let len = m.snap(clip.start + raw, snapOpt) - clip.start;
+      // pull toward whole repeats (within 10px) so "exactly 2×" is easy to hit
+      const whole = Math.round(raw / L) * L;
+      if (Math.abs(this.tickToX(whole - raw)) < 10) len = whole;
+      newLen = Math.max(m.gridTicksAt(clip.start, snapOpt), len);
       clipEl.style.width = `${this.tickToX(newLen)}px`;
+      const reps = newLen / L;
+      label.textContent = reps <= 1.0001 ? (reps < 0.999 ? 'shorter than the pattern' : 'plays once (no repeats)') : `plays ${+reps.toFixed(2)}×`;
     };
     const up = (ev) => {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
+      label.remove();
       if (!moved) {
-        if (ev.shiftKey) {
-          // repeat until the end of the song (last clip on any track, or at least 4 more repeats)
-          let end = 0;
-          for (const t of this.store.project.tracks) for (const c of t.clips) if (c.id !== clip.id) end = Math.max(end, c.start + c.length);
-          const reps = Math.max(Math.ceil((end - clip.start) / L), Math.ceil(origLen / L) + 4);
-          newLen = reps * L;
-        } else {
-          newLen = (Math.floor(origLen / L + 1e-6) + 1) * L;
-        }
+        if (ev.shiftKey) this.setRepeat(clip, track, 'end');
+        else this.setRepeat(clip, track, (Math.floor(origLen / L + 1e-6) + 1) * L);
+        return;
       }
-      if (newLen === origLen) { clipEl.style.width = `${this.tickToX(origLen)}px`; return; }
-      this.store.mutate((p) => {
-        const c = p.tracks.find((t) => t.id === track.id)?.clips.find((x) => x.id === clip.id);
-        if (c) { c.loop = L; c.length = newLen; }
-      });
+      if (newLen === origLen) return;
+      this.setRepeat(clip, track, newLen);
     };
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
+  }
+
+  repeatMenu(e, clip, track) {
+    e.preventDefault();
+    e.stopPropagation();
+    const L = patternLength(clip);
+    const reps = clip.length / L;
+    popupMenu(e.clientX, e.clientY, [
+      { label: 'Remove repeats', hint: 'play once', disabled: reps <= 1.0001, onClick: () => this.setRepeat(clip, track, L) },
+      { label: 'Remove last repeat', disabled: reps <= 1.0001, onClick: () => this.setRepeat(clip, track, Math.max(L, (Math.ceil(reps - 1e-6) - 1) * L)) },
+      '-',
+      { label: 'Add half a repeat', hint: '+½', onClick: () => this.setRepeat(clip, track, clip.length + L / 2) },
+      { label: 'Add one repeat', hint: '+1', onClick: () => this.setRepeat(clip, track, (Math.floor(reps + 1e-6) + 1) * L) },
+      { label: 'Double it', hint: `→ ${+(reps * 2).toFixed(2)}×`, onClick: () => this.setRepeat(clip, track, clip.length * 2) },
+      { label: 'Repeat to the end of the song', onClick: () => this.setRepeat(clip, track, 'end') },
+    ]);
+  }
+
+  /** Set how long a repeating clip plays (ticks), or 'end' to fill to the end of the song. */
+  setRepeat(clip, track, len) {
+    const L = patternLength(clip);
+    if (len === 'end') {
+      let end = 0;
+      for (const t of this.store.project.tracks) for (const c of t.clips) if (c.id !== clip.id) end = Math.max(end, c.start + c.length);
+      len = Math.max(Math.ceil((end - clip.start) / L), Math.ceil(clip.length / L) + 4) * L;
+    }
+    len = Math.max(1, Math.round(len));
+    this.store.mutate((p) => {
+      const c = p.tracks.find((t) => t.id === track.id)?.clips.find((x) => x.id === clip.id);
+      if (!c) return;
+      if (Math.abs(len - L) < 1) { c.length = L; delete c.loop; } // back to a plain clip
+      else if (len < L) { c.length = len; delete c.loop; } // shorter than the pattern: just a shorter clip
+      else { c.loop = L; c.length = len; }
+    });
   }
 
   bindLanes() {
@@ -481,6 +604,12 @@ export class Timeline {
       };
       clipEl.addEventListener('pointermove', move);
       clipEl.addEventListener('pointerup', up);
+    });
+
+    this.rows.addEventListener('contextmenu', (e) => {
+      if (!e.target.dataset?.repeat) return;
+      const found = this.store.findClip(e.target.closest('.clip').dataset.clip);
+      if (found) this.repeatMenu(e, found.clip, found.track);
     });
 
     this.rows.addEventListener('dblclick', (e) => {

@@ -7,8 +7,7 @@ import { h, openModal, toast } from './dom.js';
 import { shade } from './timeline.js';
 import { patternLength } from '../project.js';
 
-const ROW_H = 14;
-const KEYS_W = 64;
+const KEYS_W = 46;
 const VEL_H = 74;
 const RULER_H = 22;
 const BLACK = new Set([1, 3, 6, 8, 10]);
@@ -29,6 +28,7 @@ export class PianoRoll {
     this.noteLen = 'grid';
     this.newVel = 100;
     this.pxPerQuarter = 96;
+    this.rowH = 9; // height of one note row (vertical zoom)
     this.sel = new Set();
     this.work = null; // notes being edited during a drag
     this.box = null;
@@ -56,7 +56,7 @@ export class PianoRoll {
       requestAnimationFrame(() => {
         const ps = c.notes.map((n) => n.p);
         const center = ps.length ? (Math.max(...ps) + Math.min(...ps)) / 2 : 60;
-        this.scroll.scrollTop = Math.max(0, (127 - center) * ROW_H - this.scroll.clientHeight / 2);
+        this.scroll.scrollTop = Math.max(0, (127 - center) * this.rowH - this.scroll.clientHeight / 2);
         this.scroll.scrollLeft = 0;
         this.draw();
       });
@@ -88,8 +88,10 @@ export class PianoRoll {
         h('button', { class: 'pbtn', title: 'Delete selected notes (Del)', onclick: () => this.deleteSelected() }, 'Delete')),
       h('div', { class: 'spacer' }),
       h('div', { class: 'pgroup' },
-        h('button', { class: 'pbtn', title: 'Zoom out (Ctrl + scroll)', onclick: () => this.zoom(1 / 1.25) }, '−'),
-        h('button', { class: 'pbtn', title: 'Zoom in (Ctrl + scroll)', onclick: () => this.zoom(1.25) }, '+')));
+        h('button', { class: 'pbtn', title: 'Shorter rows — fit more octaves (Shift + Ctrl + scroll)', onclick: () => this.vzoom(-1) }, '↕−'),
+        h('button', { class: 'pbtn', title: 'Taller rows (Shift + Ctrl + scroll)', onclick: () => this.vzoom(1) }, '↕+'),
+        h('button', { class: 'pbtn', title: 'Zoom out in time (Ctrl + scroll)', onclick: () => this.zoom(1 / 1.25) }, '↔−'),
+        h('button', { class: 'pbtn', title: 'Zoom in in time (Ctrl + scroll)', onclick: () => this.zoom(1.25) }, '↔+')));
 
     this.rulerCanvas = h('canvas', { class: 'pr-ruler' });
     this.keysCanvas = h('canvas', { class: 'pr-keys' });
@@ -103,7 +105,7 @@ export class PianoRoll {
       h('div', { class: 'pr-ruler-wrap' }, this.rulerCanvas),
       h('div', { class: 'pr-keys-wrap' }, this.keysCanvas),
       this.scroll,
-      h('div', { class: 'pr-vel-label' }, 'Velocity'),
+      h('div', { class: 'pr-vel-label', title: 'Velocity' }, 'Vel'),
       h('div', { class: 'pr-vel-wrap' }, this.velCanvas));
     this.root.append(h('div', { class: 'pr' }, toolbar, this.body, this.empty));
 
@@ -111,7 +113,8 @@ export class PianoRoll {
     this.scroll.addEventListener('wheel', (e) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      this.zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX);
+      if (e.shiftKey) this.vzoom(e.deltaY < 0 ? 1 : -1, e.clientY);
+      else this.zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX);
     }, { passive: false });
     new ResizeObserver(() => this.draw()).observe(this.scroll);
     this.root.addEventListener('pointerdown', () => { this.active = true; }, true);
@@ -143,6 +146,17 @@ export class PianoRoll {
     this.draw();
   }
 
+  /** Change row height, keeping the pitch under the pointer (or the middle) in place. */
+  vzoom(dir, clientY) {
+    const rect = this.scroll.getBoundingClientRect();
+    const yIn = clientY != null ? clientY - rect.top : this.scroll.clientHeight / 2;
+    const pitchRow = (this.scroll.scrollTop + yIn) / this.rowH;
+    this.rowH = Math.max(5, Math.min(24, this.rowH + dir * (this.rowH >= 12 ? 2 : 1)));
+    this.draw();
+    this.scroll.scrollTop = Math.max(0, pitchRow * this.rowH - yIn);
+    this.draw();
+  }
+
   contentTicks() {
     const c = this.clip;
     if (!c) return PPQ * 16;
@@ -164,7 +178,7 @@ export class PianoRoll {
     const ppt = this.ppt;
     const totalW = Math.ceil(this.contentTicks() * ppt);
     this.spacer.style.width = `${totalW}px`;
-    this.spacer.style.height = `${128 * ROW_H}px`;
+    this.spacer.style.height = `${128 * this.rowH}px`;
     const m = this.meter;
     const color = colorForTrack(this.track);
 
@@ -172,15 +186,15 @@ export class PianoRoll {
     const g = setup(this.gridCanvas, W, H, dpr);
     this.gridCanvas.style.left = `${x0}px`;
     this.gridCanvas.style.top = `${y0}px`;
-    const firstRow = Math.floor(y0 / ROW_H);
-    const lastRow = Math.ceil((y0 + H) / ROW_H);
+    const firstRow = Math.floor(y0 / this.rowH);
+    const lastRow = Math.ceil((y0 + H) / this.rowH);
     for (let r = firstRow; r <= lastRow && r < 128; r++) {
       const p = 127 - r;
-      const y = r * ROW_H - y0;
+      const y = r * this.rowH - y0;
       g.fillStyle = BLACK.has(p % 12) ? '#15181d' : '#1b1f26';
-      g.fillRect(0, y, W, ROW_H);
+      g.fillRect(0, y, W, this.rowH);
       g.fillStyle = p % 12 === 0 ? '#323a47' : '#20252d';
-      g.fillRect(0, y + ROW_H - 1, W, 1);
+      g.fillRect(0, y + this.rowH - 1, W, 1);
     }
     // time lines
     const t0 = x0 / ppt;
@@ -201,18 +215,18 @@ export class PianoRoll {
     for (const n of notes) {
       const x = n.t * ppt - x0;
       const w = Math.max(3, n.d * ppt);
-      const y = (127 - n.p) * ROW_H - y0;
-      if (x > W || x + w < 0 || y > H || y + ROW_H < 0) continue;
+      const y = (127 - n.p) * this.rowH - y0;
+      if (x > W || x + w < 0 || y > H || y + this.rowH < 0) continue;
       const sel = this.sel.has(n.id);
       const a = 0.45 + 0.55 * (n.v / 127);
       g.fillStyle = sel ? shade(color, 1.45) : shade(color, 0.55 + 0.6 * a);
-      g.fillRect(x + 0.5, y + 1, w - 1, ROW_H - 2);
+      g.fillRect(x + 0.5, y + 1, w - 1, this.rowH - 2);
       g.strokeStyle = sel ? '#ffffff' : 'rgba(0,0,0,0.55)';
       g.lineWidth = sel ? 1.5 : 1;
-      g.strokeRect(x + 0.5, y + 1, w - 1, ROW_H - 2);
-      if (w > 30) {
+      g.strokeRect(x + 0.5, y + 1, w - 1, this.rowH - 2);
+      if (w > 30 && this.rowH >= 10) {
         g.fillStyle = 'rgba(0,0,0,0.75)';
-        g.fillText(noteName(n.p), x + 4, y + ROW_H / 2 + 0.5);
+        g.fillText(noteName(n.p), x + 4, y + this.rowH / 2 + 0.5);
       }
     }
     // playhead
@@ -236,18 +250,18 @@ export class PianoRoll {
 
     // keys
     const k = setup(this.keysCanvas, KEYS_W, H, dpr);
-    k.font = '10px system-ui, sans-serif';
+    k.font = `${Math.min(10, Math.max(7, this.rowH - 1))}px system-ui, sans-serif`;
     k.textBaseline = 'middle';
     for (let row = firstRow; row <= lastRow && row < 128; row++) {
       const p = 127 - row;
-      const y = row * ROW_H - y0;
+      const y = row * this.rowH - y0;
       const black = BLACK.has(p % 12);
       const lit = this.litKey === p;
       k.fillStyle = lit ? '#ff7a2f' : black ? '#22262d' : '#d9dde4';
-      k.fillRect(0, y, KEYS_W, ROW_H);
-      if (black && !lit) { k.fillStyle = '#d9dde4'; k.fillRect(KEYS_W - 16, y, 16, ROW_H); k.fillStyle = '#22262d'; k.fillRect(0, y + 1, KEYS_W - 16, ROW_H - 2); }
-      k.fillStyle = 'rgba(0,0,0,0.25)'; k.fillRect(0, y + ROW_H - 1, KEYS_W, 1);
-      if (p % 12 === 0) { k.fillStyle = '#333'; k.fillText(noteName(p), 4, y + ROW_H / 2); }
+      k.fillRect(0, y, KEYS_W, this.rowH);
+      if (black && !lit) { k.fillStyle = '#d9dde4'; k.fillRect(KEYS_W - 12, y, 12, this.rowH); k.fillStyle = '#22262d'; k.fillRect(0, y + 1, KEYS_W - 12, this.rowH - 2); }
+      k.fillStyle = 'rgba(0,0,0,0.25)'; k.fillRect(0, y + this.rowH - 1, KEYS_W, 1);
+      if (p % 12 === 0) { k.fillStyle = '#333'; k.fillText(noteName(p), 4, y + this.rowH / 2); }
     }
 
     // velocity lane
@@ -302,7 +316,7 @@ export class PianoRoll {
   }
 
   noteAt(x, y) {
-    const p = 127 - Math.floor(y / ROW_H);
+    const p = 127 - Math.floor(y / this.rowH);
     const t = x / this.ppt;
     const list = this.notes;
     for (let i = list.length - 1; i >= 0; i--) {
@@ -380,7 +394,7 @@ export class PianoRoll {
         return;
       }
       // double-click empty space to add a note
-      const p = 127 - Math.floor(y / ROW_H);
+      const p = 127 - Math.floor(y / this.rowH);
       if (p < 0 || p > 127) return;
       const t = this.snapRel(x / this.ppt, 'floor');
       this.beginWork();
@@ -429,7 +443,7 @@ export class PianoRoll {
             const minT = Math.min(...[...orig.values()].map((o) => o.t));
             let shift = newStart - anchor.t;
             if (minT + shift < 0) shift = -minT;
-            const dp = Math.round((y - c2.y) / ROW_H);
+            const dp = Math.round((y - c2.y) / this.rowH);
             for (const w of this.work) {
               const o = orig.get(w.id);
               if (o) { w.t = Math.max(0, o.t + shift); w.p = Math.max(0, Math.min(127, o.p + dp)); }
@@ -447,8 +461,8 @@ export class PianoRoll {
           const c2 = this.toContent(ev);
           this.box.x2 = c2.x; this.box.y2 = c2.y;
           const tx1 = Math.min(x, c2.x) / ppt; const tx2 = Math.max(x, c2.x) / ppt;
-          const pHi = 127 - Math.floor(Math.min(y, c2.y) / ROW_H);
-          const pLo = 127 - Math.floor(Math.max(y, c2.y) / ROW_H);
+          const pHi = 127 - Math.floor(Math.min(y, c2.y) / this.rowH);
+          const pLo = 127 - Math.floor(Math.max(y, c2.y) / this.rowH);
           this.sel = new Set(before);
           for (const n of this.clip.notes) if (n.t + n.d >= tx1 && n.t <= tx2 && n.p >= pLo && n.p <= pHi) this.sel.add(n.id);
         };
@@ -481,7 +495,7 @@ export class PianoRoll {
     let held = null;
     const pitchAt = (e) => {
       const rect = c.getBoundingClientRect();
-      return 127 - Math.floor((e.clientY - rect.top + this.scroll.scrollTop) / ROW_H);
+      return 127 - Math.floor((e.clientY - rect.top + this.scroll.scrollTop) / this.rowH);
     };
     const on = (p) => { held = p; this.litKey = p; if (this.track) this.engine.liveNoteOn(this.track.id, p, 100); this.draw(); };
     const off = () => { if (held != null && this.track) this.engine.liveNoteOff(this.track.id, held); held = null; this.litKey = null; this.draw(); };
