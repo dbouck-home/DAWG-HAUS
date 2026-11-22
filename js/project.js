@@ -65,6 +65,7 @@ export function newProject(name = 'Untitled Song') {
     meters: [{ bar: 0, num: 4, den: 4, group: '' }],
     loop: { enabled: false, start: 0, end: PPQ * 4 * 4 },
     metronome: { enabled: false, volume: 0.6 },
+    countIn: 0, // bars of count-in before recording
     masterVolume: 0,
     lengthBars: 64,
     tracks: [],

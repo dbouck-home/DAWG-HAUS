@@ -1,5 +1,5 @@
 // Track headers (left column) and mixer strips.
-import { PRESETS, colorForTrack, CATEGORY_COLORS } from '../audio/presets.js';
+import { PRESETS, colorForTrack, CATEGORY_COLORS, TRACK_COLORS } from '../audio/presets.js';
 import { h, confirmBox } from './dom.js';
 import { KITS } from '../audio/drums.js';
 import { targetsFor, activeLane } from '../automation.js';
@@ -108,7 +108,7 @@ export class TrackHeaders {
         'data-track': t.id,
         onpointerdown: () => { if (this.store.ui.selectedTrackId !== t.id) this.store.setUI({ selectedTrackId: t.id }); },
       },
-      h('div', { class: 'color', style: { background: colorForTrack(t) } }),
+      h('div', { class: 'color', title: 'Track color — click to change', style: { background: colorForTrack(t) }, onclick: (e) => this.colorPicker(e, t) }),
       h('div', { class: 'body' },
         h('div', { class: 'row' },
           nameEl,
@@ -139,6 +139,23 @@ export class TrackHeaders {
       this.el.append(el);
       if (t.showAuto) for (const lane of t.automation || []) this.el.append(this.autoHeader(t, lane));
     });
+  }
+
+  colorPicker(e, t) {
+    e.stopPropagation();
+    document.querySelector('.popmenu')?.remove();
+    const set = (c) => { menu.remove(); this.store.mutate((p) => { const x = p.tracks.find((y) => y.id === t.id); if (c) x.color = c; else delete x.color; }); };
+    const cur = colorForTrack(t);
+    const menu = h('div', { class: 'popmenu colorpop' },
+      h('div', { class: 'swatches' }, TRACK_COLORS.map((c) => h('button', { class: `swatch ${c === cur ? 'on' : ''}`, style: { background: c }, title: c, onclick: () => set(c) }))),
+      h('label', { class: 'popitem custom-color' }, 'Custom…', h('input', { type: 'color', value: cur, onchange: (ev) => set(ev.target.value) })),
+      h('button', { class: 'popitem', onclick: () => set(null) }, 'Automatic', h('small', {}, 'by instrument type')));
+    document.body.append(menu);
+    const r = e.target.getBoundingClientRect();
+    menu.style.left = `${r.right + 6}px`;
+    menu.style.top = `${Math.min(r.top, window.innerHeight - menu.getBoundingClientRect().height - 8)}px`;
+    const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('pointerdown', close, true); } };
+    setTimeout(() => document.addEventListener('pointerdown', close, true), 0);
   }
 
   updateSelection() {

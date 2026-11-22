@@ -14,7 +14,7 @@ export function laneData(project, trackId, laneId) {
       info: TEMPO_TARGET,
       points: project.tempos.map((x) => ({ t: x.tick, v: x.bpm })),
       staticValue: project.tempos[0]?.bpm ?? 120,
-      color: '#ffb36b',
+      color: '#b5d6ec',
       isTempo: true,
     };
   }

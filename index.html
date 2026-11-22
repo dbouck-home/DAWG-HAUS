@@ -31,8 +31,9 @@
       <button id="btn-stop" class="tbtn" title="Stop">■</button>
       <button id="btn-play" class="tbtn play" title="Play / Pause (Space)">▶</button>
       <button id="btn-record" class="tbtn rec" title="Record MIDI on the selected track (R)">●</button>
+      <button id="btn-countin" class="tbtn toggle small-text" title="Count-in before recording: click to switch between off, 1 bar and 2 bars">Count-in off</button>
       <button id="btn-loop" class="tbtn toggle" title="Loop (drag on the top strip of the ruler to set the loop)">⟲</button>
-      <button id="btn-metro" class="tbtn toggle" title="Metronome">𝅘𝅥 Click</button>
+      <button id="btn-metro" class="tbtn toggle" title="Metronome">♩ Click</button>
     </div>
     <div class="lcd">
       <div class="lcd-main" id="pos-bbt">1.1.000</div>
@@ -43,7 +44,7 @@
         <span>BPM</span>
         <input id="inp-bpm" type="number" min="20" max="400" step="0.1" value="120">
       </label>
-      <button id="btn-tempo-lane" class="tbtn toggle" title="Show the tempo lane — add points to speed up or slow down the whole song">Tempo ⤴</button>
+      <button id="btn-tempo-lane" class="tbtn toggle small-text" title="Show the tempo lane — add points to speed up or slow down the whole song">Tempo lane</button>
       <button id="btn-meter" class="meter-btn" title="Time signature at the playhead's bar">4/4</button>
       <label class="field">
         <span>Snap</span>
@@ -58,11 +59,14 @@
     <div class="group">
       <button id="btn-zoom-out" class="tbtn small" title="Zoom out (Ctrl + scroll)">−</button>
       <button id="btn-zoom-in" class="tbtn small" title="Zoom in (Ctrl + scroll)">+</button>
+      <button id="btn-panels" class="tbtn toggle" title="Show / hide the bottom panel (Editor, Instrument, Effects, Mixer, Keyboard)">▤ Panels</button>
+      <span class="tab-btns">
       <button id="btn-tab-pianoroll" class="tbtn toggle" title="Piano roll / beat editor (double-click a clip)">Editor</button>
       <button id="btn-tab-instrument" class="tbtn toggle" title="Instrument settings for the selected track">Instrument</button>
       <button id="btn-tab-effects" class="tbtn toggle" title="Effects for the selected track or the master">Effects</button>
       <button id="btn-tab-mixer" class="tbtn toggle" title="Mixer">Mixer</button>
       <button id="btn-tab-keyboard" class="tbtn toggle" title="On-screen keyboard">Keyboard</button>
+      </span>
     </div>
   </div>
 

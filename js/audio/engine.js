@@ -226,10 +226,32 @@ export class Engine {
     return Math.max(0, tempo.secToTick(sec));
   }
 
-  play(fromTick = this.positionTick) {
+  /**
+   * Start playback. opts.countInBars: play that many bars of metronome clicks first
+   * (in the time signature and tempo at the start point), then start.
+   */
+  play(fromTick = this.positionTick, opts = {}) {
     this.ensureContext();
     if (this.playing) return;
-    const startTime = this.ctx.currentTime + 0.06;
+    let startTime = this.ctx.currentTime + 0.06;
+    this.countIn = null;
+    if (opts.countInBars > 0) {
+      const { meter, tempo } = this.maps();
+      const seg = meter.segmentForTick(fromTick);
+      const beatSec = (60 / tempo.bpmAt(fromTick)) * (4 / seg.den);
+      const beats = seg.num * opts.countInBars;
+      const t0 = this.ctx.currentTime + 0.1;
+      this.countGain = this.ctx.createGain();
+      this.countGain.connect(this.clickGain);
+      const groupStarts = new Set([0]);
+      if (seg.groups) { let a = 0; for (const g of seg.groups) { groupStarts.add(a); a += g; } }
+      for (let i = 0; i < beats; i++) {
+        const b = i % seg.num;
+        this.click(t0 + i * beatSec, b === 0 ? 2 : groupStarts.has(b) ? 1 : 0, this.countGain, true);
+      }
+      startTime = t0 + beats * beatSec;
+      this.countIn = { t0, beatSec, beats, until: startTime };
+    }
     this.anchors = [{ tick: fromTick, time: startTime }];
     this.cursorTick = fromTick;
     this.playing = true;
@@ -240,6 +262,8 @@ export class Engine {
   }
 
   stop() {
+    if (this.countGain) { try { this.countGain.disconnect(); } catch { /* ignore */ } this.countGain = null; }
+    this.countIn = null;
     if (!this.playing) { this.positionTick = 0; this.emit('transport'); return; }
     const t = this.currentTick();
     this.finishRecording(t);
@@ -401,7 +425,14 @@ export class Engine {
     }
   }
 
-  click(time, accent) {
+  /** Beats left in the count-in (0 when not counting in). */
+  countInLeft() {
+    const c = this.countIn;
+    if (!c || !this.ctx || this.ctx.currentTime >= c.until) return 0;
+    return Math.max(1, c.beats - Math.floor((this.ctx.currentTime - c.t0) / c.beatSec));
+  }
+
+  click(time, accent, dest = this.clickGain, loud = false) {
     const ctx = this.ctx;
     const o = ctx.createOscillator();
     const g = ctx.createGain();
@@ -411,7 +442,9 @@ export class Engine {
     g.gain.setValueAtTime(0, time);
     g.gain.linearRampToValueAtTime(peak, time + 0.001);
     g.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
-    o.connect(g).connect(this.clickGain);
+    // count-in clicks play even if the metronome volume is turned all the way down
+    if (loud && this.getProject().metronome.volume < 0.3) g.gain.value *= 2;
+    o.connect(g).connect(dest);
     o.start(time);
     o.stop(time + 0.06);
   }
@@ -422,7 +455,7 @@ export class Engine {
     this.ensureContext();
     const ch = this.channels.get(trackId);
     ch?.instrument?.noteOn(pitch, vel, this.ctx.currentTime);
-    this.emit('live', pitch, true);
+    this.emit('live', pitch, true, trackId);
     if (this.recording && this.playing && trackId === this.recordTrackId) {
       const tick = Math.round(this.currentTick());
       const n = { tick, p: pitch, v: vel, d: null };
@@ -435,7 +468,7 @@ export class Engine {
     if (!this.ctx) return;
     const ch = this.channels.get(trackId);
     ch?.instrument?.noteOff(pitch, this.ctx.currentTime, true);
-    this.emit('live', pitch, false);
+    this.emit('live', pitch, false, trackId);
     const n = this.openRec.get(pitch);
     if (n) { this.closeRec(n, Math.round(this.currentTick())); this.openRec.delete(pitch); }
   }

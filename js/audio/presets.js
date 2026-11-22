@@ -129,7 +129,13 @@ export function getPreset(id) {
   return PRESETS.find((p) => p.id === id) || PRESETS[0];
 }
 
+export const TRACK_COLORS = [
+  '#7bafd4', '#4f8cff', '#3fc1c9', '#3ddc97', '#7ddc4f', '#e3c84a', '#ffb020', '#ff8a4c',
+  '#ff5d73', '#ff4fa3', '#ff7ad9', '#b36bff', '#8c7bff', '#9aa3b2', '#e8e8e8', '#c49a6c',
+];
+
 export function colorForTrack(track) {
+  if (track.color) return track.color;
   if (track.type === 'audio') return CATEGORY_COLORS.Audio;
   if (track.type === 'drums') return CATEGORY_COLORS.Drums;
   return CATEGORY_COLORS[getPreset(track.instrument?.preset).category] || '#888';

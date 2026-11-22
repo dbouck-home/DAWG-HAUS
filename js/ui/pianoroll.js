@@ -25,7 +25,7 @@ export class PianoRoll {
     this.root = root;
     this.clipId = null;
     this.grid = PPQ / 4;
-    this.noteLen = 'grid';
+    this.noteLen = 'last'; // new notes copy the length of the last note placed or touched
     this.newVel = 100;
     this.pxPerQuarter = 96;
     this.rowH = 9; // height of one note row (vertical zoom)
@@ -34,6 +34,8 @@ export class PianoRoll {
     this.box = null;
     this.active = false;
     this.lastLen = null;
+    this.litKeys = new Set(); // pitches being played right now (keys + matching notes light up)
+    engine.on('live', (p, on, trackId) => { if (trackId && trackId !== this.track?.id) return; if (on) this.litKeys.add(p); else this.litKeys.delete(p); if (this.clip) this.draw(); });
     this.quant = { grid: PPQ / 4, strength: 100, swing: 0, ends: false };
     this.build();
   }
@@ -69,7 +71,7 @@ export class PianoRoll {
     const gridSel = h('select', { title: 'Grid / snap', onchange: (e) => { this.grid = e.target.value === 'off' ? 'off' : +e.target.value; this.draw(); e.target.blur(); } },
       NOTE_GRIDS.map((g) => h('option', { value: String(g.value), selected: g.value === this.grid }, g.label)));
     const lenSel = h('select', { title: 'Length of new notes', onchange: (e) => { this.noteLen = e.target.value === 'grid' ? 'grid' : e.target.value === 'last' ? 'last' : +e.target.value; e.target.blur(); } },
-      h('option', { value: 'grid' }, '= Grid'), h('option', { value: 'last' }, 'Last used'),
+      h('option', { value: 'last', selected: true }, 'Last note'), h('option', { value: 'grid' }, '= Grid'),
       NOTE_GRIDS.filter((g) => g.value !== 'off').map((g) => h('option', { value: String(g.value) }, g.label)));
     const velIn = h('input', { type: 'number', min: 1, max: 127, value: this.newVel, title: 'Velocity of new notes', onchange: (e) => { this.newVel = Math.max(1, Math.min(127, +e.target.value || 100)); e.target.value = this.newVel; } });
     velIn.addEventListener('keydown', (e) => e.stopPropagation());
@@ -219,8 +221,11 @@ export class PianoRoll {
       if (x > W || x + w < 0 || y > H || y + this.rowH < 0) continue;
       const sel = this.sel.has(n.id);
       const a = 0.45 + 0.55 * (n.v / 127);
-      g.fillStyle = sel ? shade(color, 1.45) : shade(color, 0.55 + 0.6 * a);
+      const lit = this.litKeys.has(n.p);
+      if (lit) { g.shadowColor = '#e6f2fa'; g.shadowBlur = 8; }
+      g.fillStyle = lit ? '#e6f2fa' : sel ? shade(color, 1.45) : shade(color, 0.55 + 0.6 * a);
       g.fillRect(x + 0.5, y + 1, w - 1, this.rowH - 2);
+      g.shadowBlur = 0;
       g.strokeStyle = sel ? '#ffffff' : 'rgba(0,0,0,0.55)';
       g.lineWidth = sel ? 1.5 : 1;
       g.strokeRect(x + 0.5, y + 1, w - 1, this.rowH - 2);
@@ -231,7 +236,7 @@ export class PianoRoll {
     }
     // playhead
     const ph = (this.engine.currentTick() - c.start) * ppt - x0;
-    if (ph >= 0 && ph <= W) { g.fillStyle = '#ff7a2f'; g.fillRect(ph, 0, 2, H); }
+    if (ph >= 0 && ph <= W) { g.fillStyle = '#7bafd4'; g.fillRect(ph, 0, 2, H); }
     // selection box
     if (this.box) {
       const bx = Math.min(this.box.x1, this.box.x2) - x0;
@@ -256,8 +261,8 @@ export class PianoRoll {
       const p = 127 - row;
       const y = row * this.rowH - y0;
       const black = BLACK.has(p % 12);
-      const lit = this.litKey === p;
-      k.fillStyle = lit ? '#ff7a2f' : black ? '#22262d' : '#d9dde4';
+      const lit = this.litKeys.has(p);
+      k.fillStyle = lit ? '#7bafd4' : black ? '#22262d' : '#d9dde4';
       k.fillRect(0, y, KEYS_W, this.rowH);
       if (black && !lit) { k.fillStyle = '#d9dde4'; k.fillRect(KEYS_W - 12, y, 12, this.rowH); k.fillStyle = '#22262d'; k.fillRect(0, y + 1, KEYS_W - 12, this.rowH - 2); }
       k.fillStyle = 'rgba(0,0,0,0.25)'; k.fillRect(0, y + this.rowH - 1, KEYS_W, 1);
@@ -399,6 +404,7 @@ export class PianoRoll {
       const t = this.snapRel(x / this.ppt, 'floor');
       this.beginWork();
       const n = { id: newId(), t, d: this.newNoteLen(), p, v: this.newVel };
+      this.lastLen = n.d;
       this.work.push(n);
       this.sel.clear(); this.sel.add(n.id);
       this.audition(p, this.newVel);
@@ -416,6 +422,7 @@ export class PianoRoll {
 
       if (hit) {
         const n = hit.note;
+        this.lastLen = n.d;
         if (e.shiftKey) { if (this.sel.has(n.id)) this.sel.delete(n.id); else this.sel.add(n.id); }
         else if (!this.sel.has(n.id)) { this.sel.clear(); this.sel.add(n.id); }
         this.beginWork();
@@ -497,8 +504,8 @@ export class PianoRoll {
       const rect = c.getBoundingClientRect();
       return 127 - Math.floor((e.clientY - rect.top + this.scroll.scrollTop) / this.rowH);
     };
-    const on = (p) => { held = p; this.litKey = p; if (this.track) this.engine.liveNoteOn(this.track.id, p, 100); this.draw(); };
-    const off = () => { if (held != null && this.track) this.engine.liveNoteOff(this.track.id, held); held = null; this.litKey = null; this.draw(); };
+    const on = (p) => { held = p; if (this.track) this.engine.liveNoteOn(this.track.id, p, 100); else { this.litKeys.add(p); } this.draw(); };
+    const off = () => { if (held != null && this.track) this.engine.liveNoteOff(this.track.id, held); this.litKeys.delete(held); held = null; this.draw(); };
     c.addEventListener('pointerdown', (e) => { c.setPointerCapture(e.pointerId); on(pitchAt(e)); });
     c.addEventListener('pointermove', (e) => { if (held == null) return; const p = pitchAt(e); if (p !== held) { off(); on(p); } });
     c.addEventListener('pointerup', off);

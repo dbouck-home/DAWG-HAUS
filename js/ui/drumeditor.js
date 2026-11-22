@@ -243,7 +243,7 @@ export class BeatEditor {
       if (y > H || y + ROW_H < 0) return;
       const sel = pad.note === this.selRow;
       const lit = this.lit === pad.note;
-      k.fillStyle = lit ? '#ff7a2f' : sel ? '#2c3340' : '#1e222a';
+      k.fillStyle = lit ? '#7bafd4' : sel ? '#2c3340' : '#1e222a';
       k.fillRect(0, y + 1, NAMES_W, ROW_H - 2);
       k.fillStyle = sel ? color : '#3a414e';
       k.fillRect(0, y + 1, 3, ROW_H - 2);

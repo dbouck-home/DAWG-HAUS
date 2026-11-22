@@ -208,7 +208,7 @@ export class Timeline {
       g.beginPath(); g.moveTo(Math.round(bx) + 0.5, 0); g.lineTo(Math.round(bx) + 0.5, lanesH); g.stroke();
     }
     if (p.loop.enabled) {
-      g.fillStyle = 'rgba(255,122,47,0.05)';
+      g.fillStyle = 'rgba(123,175,212,0.05)';
       g.fillRect(p.loop.start * ppt - x0, 0, (p.loop.end - p.loop.start) * ppt, lanesH);
     }
 
@@ -252,9 +252,9 @@ export class Timeline {
       if (isChange) {
         const label = `${seg.num}/${seg.den}${seg.groups ? ` (${seg.group})` : ''}`;
         const tw = r.measureText(label).width + 8;
-        r.fillStyle = '#3b2a1e';
+        r.fillStyle = '#1b2d3d';
         r.fillRect(bx + 1, RH - 15, tw, 13);
-        r.fillStyle = '#ffb36b';
+        r.fillStyle = '#b5d6ec';
         r.fillText(label, bx + 5, RH - 8);
         this.meterMarkers.push({ bar, x: bx + x0, w: tw });
       }
@@ -315,7 +315,7 @@ export class Timeline {
     }
     const on = loop.enabled;
     // region
-    r.fillStyle = on ? '#ff7a2f' : '#3a404c';
+    r.fillStyle = on ? '#7bafd4' : '#3a404c';
     r.beginPath();
     r.roundRect ? r.roundRect(lx, 2, lw, H - 4, 5) : r.rect(lx, 2, lw, H - 4);
     r.fill();
@@ -327,9 +327,9 @@ export class Timeline {
     }
     // grab handles at both ends
     for (const hx of [lx, lx + lw - 8]) {
-      r.fillStyle = on ? '#b84d10' : '#252a33';
+      r.fillStyle = on ? '#3a72a0' : '#252a33';
       r.fillRect(hx, 2, 8, H - 4);
-      r.fillStyle = on ? '#ffd2b0' : '#8b93a3';
+      r.fillStyle = on ? '#e6f2fa' : '#8b93a3';
       r.fillRect(hx + 2.5, 6, 1, H - 12);
       r.fillRect(hx + 4.5, 6, 1, H - 12);
     }
@@ -339,7 +339,7 @@ export class Timeline {
     const b2 = +(m.tickToBar(loop.end) + 1).toFixed(2);
     const full = on ? `⟲ Loop bars ${b1}–${b2} · click to turn off · drag the ends to resize` : `⟲ Loop off (bars ${b1}–${b2}) · click to turn on`;
     const short = on ? `⟲ ${b1}–${b2}` : '⟲ off';
-    r.fillStyle = on ? '#1a0d04' : '#c9ced8';
+    r.fillStyle = on ? '#06121c' : '#c9ced8';
     const avail = lw - 24;
     const text = r.measureText(full).width <= avail ? full : r.measureText(short).width <= avail ? short : '';
     if (text) r.fillText(text, Math.max(lx + 12, Math.min(lx + 12, w)), H / 2 + 0.5);

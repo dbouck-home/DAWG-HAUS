@@ -23,6 +23,12 @@ Installed copies pick up the update the next time they're opened.
 
 ## Recent improvements
 
+- New Carolina blue color scheme (and a blue dog house)
+- Track colors: click the colored strip at the left of a track to pick a color (or go back to automatic)
+- Count-in before recording: the Count-in button switches between off, 1 bar and 2 bars; the display counts down
+- Piano roll: new notes copy the length of the last note you placed, resized or clicked; playing a key (side keyboard, MIDI or computer keys) lights up every note of that pitch
+- On screens narrower than 1500px the panel buttons fold into one "Panels" button so the toolbar stays on one line
+
 - ⟳ Repeat button on every MIDI and drum clip: click to play the section one more time; drag it right or left to repeat more or less (drag back to remove repeats, stop partway for half a repeat); Shift-click repeats to the end of the song; right-click for a menu (remove repeats, add half a repeat, double…). Editing the clip changes every repeat.
 - Bigger loop strip at the top of the ruler: drag its ends to resize, drag the middle to move it, drag empty space for a new loop, click it to turn looping on/off
 - Piano roll keys are narrower and rows shorter so more octaves fit; ↕−/↕+ change the row height (or Shift+Ctrl+scroll)

@@ -89,12 +89,16 @@ async function boot() {
     const bpmInput = $('inp-bpm');
     if (document.activeElement !== bpmInput) bpmInput.value = +p.tempos[0].bpm.toFixed(2);
     $('btn-loop').classList.toggle('active', p.loop.enabled);
+    const ci = p.countIn || 0;
+    $('btn-countin').textContent = ci ? `Count-in: ${ci} bar${ci > 1 ? 's' : ''}` : 'Count-in: off';
+    $('btn-countin').classList.toggle('active', ci > 0);
     $('btn-metro').classList.toggle('active', p.metronome.enabled);
     $('inp-click-vol').value = p.metronome.volume;
     $('btn-play').classList.toggle('active', engine.playing);
     $('btn-record').classList.toggle('active', engine.recording);
     for (const tab of ['pianoroll', 'instrument', 'effects', 'mixer', 'keyboard']) $(`btn-tab-${tab}`).classList.toggle('active', dock.open && dock.tab === tab);
     $('btn-tempo-lane').classList.toggle('active', !!store.ui.showTempo);
+    $('btn-panels').classList.toggle('active', dock.open);
     bpmInput.readOnly = p.tempos.length > 1;
     bpmInput.title = p.tempos.length > 1 ? 'The tempo changes during this song — edit it in the Tempo lane' : 'Tempo in beats (quarter notes) per minute';
     $('sel-snap').value = String(store.ui.snap);
@@ -146,11 +150,13 @@ async function boot() {
   $('btn-stop').onclick = () => { engine.stop(); };
   $('btn-home').onclick = () => { engine.setPosition(0); timeline.arrange.scrollLeft = 0; };
   $('btn-record').onclick = () => toggleRecord();
+  $('btn-countin').onclick = () => store.mutate((p) => { p.countIn = ((p.countIn || 0) + 1) % 3; });
   $('btn-loop').onclick = () => store.mutate((p) => { p.loop.enabled = !p.loop.enabled; });
   $('btn-metro').onclick = () => { engine.ensureContext(); store.mutate((p) => { p.metronome.enabled = !p.metronome.enabled; }); };
   $('inp-click-vol').oninput = (e) => store.mutate((p) => { p.metronome.volume = +e.target.value; }, { merge: 'clickvol', silent: true });
   $('btn-zoom-in').onclick = () => timeline.zoom(1.3);
   $('btn-zoom-out').onclick = () => timeline.zoom(1 / 1.3);
+  $('btn-panels').onclick = () => { if (dock.open) dock.close(); else dock.show(dock.tab); };
   $('btn-tempo-lane').onclick = () => { store.ui.showTempo = !store.ui.showTempo; renderAll(); };
   for (const tab of ['pianoroll', 'instrument', 'effects', 'mixer', 'keyboard']) {
     $(`btn-tab-${tab}`).onclick = () => {
@@ -187,7 +193,7 @@ async function boot() {
     if (engine.recording) { engine.stopRecording(); return; }
     const t = store.selectedTrack();
     if (!t || t.type === 'audio') { toast('Select an instrument or drum track to record onto.'); return; }
-    if (!engine.playing) engine.play();
+    if (!engine.playing) engine.play(engine.positionTick, { countInBars: store.project.countIn || 0 });
     engine.startRecording(t.id);
     toast(`Recording on "${t.name}" — play your MIDI or computer keyboard.`);
   }
@@ -498,7 +504,9 @@ async function boot() {
     const tempo = new TempoMap(p.tempos);
     const bbt = m.tickToBBT(tick);
     const sub = Math.floor((bbt.tickInBeat / bbt.meter.beatTicks) * 1000);
-    $('pos-bbt').textContent = `${bbt.bar + 1}.${bbt.beat + 1}.${String(sub).padStart(3, '0')}`;
+    const left = engine.countInLeft();
+    $('pos-bbt').textContent = left ? `Count ${left}` : `${bbt.bar + 1}.${bbt.beat + 1}.${String(sub).padStart(3, '0')}`;
+    document.querySelector('.lcd').classList.toggle('counting', left > 0);
     $('pos-time').textContent = `${formatTime(tempo.tickToSec(tick))} · ${bbt.meter.num}/${bbt.meter.den}`;
     if (p.tempos.length > 1 && document.activeElement !== $('inp-bpm')) $('inp-bpm').value = tempo.bpmAt(tick).toFixed(1);
     if (engine.playing && (store.ui.showTempo || p.tracks.some((t) => t.showAuto))) timeline.drawLanes();
