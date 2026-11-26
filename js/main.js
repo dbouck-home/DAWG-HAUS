@@ -774,6 +774,7 @@ function setupPWA() {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Service worker failed', e));
   }
   let deferred = null;
+  $('btn-about').onclick = aboutDialog;
   const btn = $('btn-install');
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
@@ -796,3 +797,12 @@ boot().catch((e) => {
 });
 
 export { PPQ };
+
+// ---------- about & credits ----------
+async function aboutDialog() {
+  let credits = '';
+  try { credits = await (await fetch('samples/CREDITS.txt')).text(); } catch { credits = 'Credits file unavailable offline.'; }
+  openModal({ title: 'About DAWG HAUS', width: '640px',
+    body: h('pre', { class: 'credits' }, credits),
+    buttons: [{ label: 'Close', kind: 'primary' }] });
+}

@@ -1,6 +1,6 @@
 // DAWG HAUS service worker: caches the app so it opens offline.
 // Bump VERSION whenever files change so users get the update.
-const VERSION = 'dawghaus-v0.7.1';
+const VERSION = 'dawghaus-v0.8.0';
 const FILES = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/main.js', 'js/timing.js', 'js/store.js', 'js/storage.js', 'js/project.js', 'js/midi.js',

@@ -392,3 +392,5 @@ button { cursor: pointer; }
 .xbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .th.multi { background: #1d2a38; box-shadow: inset 3px 0 0 var(--accent); }
 .th.multi.selected { background: #23344a; }
+
+.credits { white-space: pre-wrap; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; max-height: 60vh; overflow: auto; margin: 0; color: var(--text, #ddd); }

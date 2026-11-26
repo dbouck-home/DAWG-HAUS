@@ -25,28 +25,36 @@ const S = (id, name, category, sample, opts = {}) => ({
 });
 
 export const PRESETS = [
-  // ---- sampled ----
+  // ---- sampled (public-domain CC0 recordings: VSCO 2 Community Edition and VCSL; see samples/CREDITS.txt) ----
   S('grand-piano', 'Grand Piano', 'Piano', 'grand-piano', { release: 0.6, gain: 1.0 }),
-  S('organ', 'Organ', 'Keys', 'organ', { release: 0.12, attack: 0.01, gain: 0.6 }),
-  S('harmonium', 'Harmonium', 'Keys', 'harmonium', { release: 0.2, attack: 0.03, gain: 0.7 }),
+  S('harpsichord', 'Harpsichord', 'Keys', 'harpsichord', { release: 0.3 }),
+  S('organ', 'Pipe Organ', 'Keys', 'organ', { release: 0.25, attack: 0.02, gain: 0.6 }),
+  S('harmonium', 'Reed Organ', 'Keys', 'organ', { release: 0.2, attack: 0.04, cutoff: 2600, gain: 0.75 }),
+  S('harmonica', 'Harmonica', 'Woodwinds', 'harmonica', { attack: 0.02, release: 0.2 }),
   S('flute', 'Flute', 'Woodwinds', 'flute', { attack: 0.02, release: 0.25 }),
+  S('oboe', 'Oboe', 'Woodwinds', 'oboe', { attack: 0.02, release: 0.25 }),
   S('clarinet', 'Clarinet', 'Woodwinds', 'clarinet', { attack: 0.015, release: 0.25 }),
   S('bass-clarinet', 'Bass Clarinet', 'Woodwinds', 'clarinet', { transpose: -12, attack: 0.02, release: 0.3, cutoff: 3200, gain: 1.0 }),
   S('bassoon', 'Bassoon', 'Woodwinds', 'bassoon', { attack: 0.015, release: 0.25 }),
-  S('saxophone', 'Saxophone', 'Woodwinds', 'saxophone', { attack: 0.01, release: 0.25 }),
+  S('saxophone', 'Tenor Saxophone', 'Woodwinds', 'saxophone', { attack: 0.01, release: 0.25 }),
   S('trumpet', 'Trumpet', 'Brass', 'trumpet', { attack: 0.01, release: 0.25 }),
   S('trombone', 'Trombone', 'Brass', 'trombone', { attack: 0.015, release: 0.3 }),
   S('french-horn', 'French Horn', 'Brass', 'french-horn', { attack: 0.03, release: 0.4 }),
   S('tuba', 'Tuba', 'Brass', 'tuba', { attack: 0.02, release: 0.3, gain: 1.0 }),
   S('violin', 'Violin', 'Strings', 'violin', { attack: 0.04, release: 0.4 }),
+  S('string-section', 'String Section', 'Strings', 'string-section', { attack: 0.08, release: 0.6 }),
+  S('pizzicato', 'Pizzicato Strings', 'Strings', 'pizzicato', { release: 0.3 }),
   S('cello', 'Cello', 'Strings', 'cello', { attack: 0.04, release: 0.45 }),
   S('contrabass', 'Double Bass', 'Strings', 'contrabass', { attack: 0.03, release: 0.4, gain: 1.0 }),
   S('harp', 'Harp', 'Guitar & Plucked', 'harp', { release: 0.9 }),
+  // guitars and electric bass are DAWG HAUS's own plucked-string models, pre-rendered to samples
   S('guitar-acoustic', 'Acoustic Guitar', 'Guitar & Plucked', 'guitar-acoustic', { release: 0.5 }),
   S('guitar-nylon', 'Nylon Guitar', 'Guitar & Plucked', 'guitar-nylon', { release: 0.5 }),
   S('guitar-electric', 'Electric Guitar', 'Guitar & Plucked', 'guitar-electric', { release: 0.4 }),
   S('bass-electric', 'Electric Bass', 'Bass', 'bass-electric', { release: 0.2, gain: 1.0 }),
   S('xylophone', 'Xylophone', 'Mallets', 'xylophone', { release: 0.6 }),
+  S('marimba', 'Marimba', 'Mallets', 'marimba', { release: 0.6 }),
+  S('vibraphone', 'Vibraphone', 'Mallets', 'vibraphone', { release: 1.2 }),
 
   // ---- synthesizers ----
   // osc: [{type, detune (cents), octave, gain}]; envelopes: attack, decay, sustain (0..1), release (s)

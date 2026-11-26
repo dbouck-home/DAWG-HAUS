@@ -1,3 +1,4 @@
+import { loadSampleSet } from './sampler.js';
 // Drum machine: synthesized drum kits (808/909-style circuits modelled in Web Audio).
 // Pads use General MIDI drum note numbers, so patterns survive kit changes and
 // MIDI drum pads/keyboards play the right sounds.
@@ -304,6 +305,23 @@ export const KITS = [
     ],
   },
   {
+    // recorded acoustic kit (public-domain samples from the Versilian Community Sample Library)
+    id: 'acoustic', name: 'Acoustic Kit', samples: 'drums-acoustic',
+    pads: [
+      P(36, 'Kick', 'sample'),
+      P(38, 'Snare', 'sample'),
+      P(37, 'Side Stick', 'sample'),
+      P(39, 'Clap', 'sample'),
+      P(42, 'Closed Hat', 'sample', {}, { choke: 'hat' }),
+      P(44, 'Pedal Hat', 'sample', {}, { choke: 'hat' }),
+      P(46, 'Open Hat', 'sample', {}, { chokeBy: 'hat' }),
+      P(41, 'Floor Tom', 'sample'),
+      P(45, 'Rack Tom', 'sample'),
+      P(49, 'Crash', 'sample'),
+      P(56, 'Cowbell', 'sample'),
+    ],
+  },
+  {
     id: 'latin', name: 'Latin Percussion',
     pads: [
       P(64, 'Low Conga', 'conga', { f0: 160, decay: 0.35, slap: 0.15 }),
@@ -347,12 +365,17 @@ export class DrumKit {
     this.setTrack(track);
   }
 
-  get ready() { return true; }
+  get ready() { return !this.kit?.samples || !!this.buffers; }
 
   setTrack(track) {
     const kit = getKit(track.drums?.kit);
     const kitChanged = this.kit?.id !== kit.id;
     this.kit = kit;
+    if (kitChanged && kit.samples) {
+      this.buffers = null;
+      this.loading = loadSampleSet(this.ctx, kit.samples).then((m) => { if (this.kit === kit) this.buffers = m; return m; });
+      this.loading.catch((e) => console.warn(e));
+    }
     this.track = JSON.parse(JSON.stringify(track));
     if (kitChanged) this.buildKitChain();
   }
@@ -398,7 +421,7 @@ export class DrumKit {
       for (const voice of this.chokeVoices.get(pad.choke) || []) voice.stop(t);
       this.chokeVoices.set(pad.choke, []);
     }
-    const voice = VOICES[pad.voice](ctx, out, t, v, pad.params, s);
+    const voice = pad.voice === 'sample' ? this.playSample(note, out, t, v, s) : VOICES[pad.voice](ctx, out, t, v, pad.params, s);
     if (pad.chokeBy && voice) {
       const list = this.chokeVoices.get(pad.chokeBy) || [];
       list.push(voice);
@@ -407,6 +430,24 @@ export class DrumKit {
     }
     setTimeout(() => { try { pn.disconnect(); } catch { /* ignore */ } }, (t - ctx.currentTime + 6) * 1000);
     return voice;
+  }
+
+  playSample(note, out, t, v, s) {
+    const buf = this.buffers?.get(note);
+    if (!buf) return null;
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = Math.pow(2, (s.tune || 0) / 12);
+    const g = ctx.createGain();
+    const len = buf.duration / src.playbackRate.value * Math.min(1, s.decay ?? 1);
+    g.gain.setValueAtTime(v, t);
+    g.gain.setValueAtTime(v, t + Math.max(0.01, len - 0.05));
+    g.gain.linearRampToValueAtTime(0, t + len);
+    src.connect(g).connect(out);
+    src.start(t);
+    src.stop(t + len + 0.01);
+    return { stop(at) { try { g.gain.cancelScheduledValues(at); g.gain.setTargetAtTime(0, at, 0.01); src.stop(at + 0.08); } catch { /* ended */ } } };
   }
 
   noteOff() {}

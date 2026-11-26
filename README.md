@@ -86,7 +86,8 @@ Installed copies pick up the update the next time they're opened.
 ## New in Phase 2
 
 - Renamed to DAWG HAUS, with a dog-house icon. Click the dog house to make it growl.
-- 21 sampled instruments: Grand Piano, Organ, Harmonium, Flute, Clarinet, Bass Clarinet, Bassoon, Saxophone, Trumpet, Trombone, French Horn, Tuba, Violin, Cello, Double Bass, Harp, Acoustic/Nylon/Electric Guitar, Electric Bass and Xylophone. Samples download the first time an instrument is used, then work offline.
+- 28 sampled instruments: Grand Piano, Harpsichord, Pipe Organ, Reed Organ, Harmonica, Flute, Oboe, Clarinet, Bass Clarinet, Bassoon, Tenor Saxophone, Trumpet, Trombone, French Horn, Tuba, Violin, String Section, Pizzicato Strings, Cello, Double Bass, Harp, Acoustic/Nylon/Electric Guitar, Electric Bass, Xylophone, Marimba and Vibraphone, plus a recorded Acoustic Kit. Samples download the first time an instrument is used, then work offline.
+- Every recorded sound is public domain (CC0) or made by DAWG HAUS itself, so the app can be sold. Credits are under the ⓘ button and in samples/CREDITS.txt.
 - Instrument panel: gain, brightness, resonance, attack, release, transpose and velocity response for sampled instruments, plus filter sweep, decay, sustain, detune and glide for synths. Settings are saved per track; double-click a slider to reset it.
 - Piano roll (double-click a clip):
   - grid 1/1 to 1/32, plus triplets (1/4T, 1/8T, 1/16T, 1/32T)
