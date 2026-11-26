@@ -60,7 +60,7 @@ export class SampleInstrument {
       // one-shot: a key retriggers its own sound instead of stacking
       for (const v of this.voices) if (v.pitch === pitch && !v.releasedAt) this.release(v, t, 0.01);
     }
-    const rate = s.mode === 'pitched' ? Math.pow(2, (pitch - s.root) / 12) : 1;
+    const rate = s.mode === 'pitched' ? Math.pow(2, (pitch - s.root - (s.fine || 0) / 100) / 12) : 1;
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = rate;
@@ -159,6 +159,12 @@ export function detectTrim(buf, threshold = 0.02) {
 
 /** Guess the pitch of a sound (MIDI note) so pitched playback is in tune; null if unclear. */
 export function detectPitch(buf, start, end) {
+  const f = detectPitchExact(buf, start, end);
+  return f == null ? null : Math.round(f);
+}
+
+/** Pitch of the sound as a fractional MIDI note (69 = A4 = 440 Hz), or null. */
+export function detectPitchExact(buf, start, end) {
   const sr = buf.sampleRate;
   const d = buf.getChannelData(0);
   const a = Math.floor(start * sr + Math.min(0.05, (end - start) / 4) * sr);
@@ -177,8 +183,15 @@ export function detectPitch(buf, start, end) {
   for (let tau = tauMin; tau <= tauMax; tau++) {
     if (dd[tau] < 0.12) {
       while (tau + 1 <= tauMax && dd[tau + 1] < dd[tau]) tau++;
-      const f = sr / tau;
-      return Math.round(69 + 12 * Math.log2(f / 440));
+      // parabolic interpolation between lags for sub-sample accuracy (cents)
+      let t = tau;
+      if (tau > 1 && tau < tauMax) {
+        const y0 = dd[tau - 1], y1 = dd[tau], y2 = dd[tau + 1];
+        const den = y0 - 2 * y1 + y2;
+        if (den) t = tau + 0.5 * (y0 - y2) / den;
+      }
+      const f = sr / t;
+      return 69 + 12 * Math.log2(f / 440);
     }
   }
   return null;

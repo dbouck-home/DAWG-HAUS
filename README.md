@@ -21,7 +21,20 @@ Opening `index.html` directly from disk will **not** work, because browsers bloc
 Upload the changed files, then raise `VERSION` in `sw.js` (for example `dawghaus-v0.2.1`).
 Installed copies pick up the update the next time they're opened.
 
-## Latest updates
+## New in 0.8
+
+- Public-domain sounds: every recorded instrument is CC0 (VSCO 2 CE and VCSL), so the app can be sold. See ⓘ for credits. New: Harpsichord, Harmonica, Oboe, String Section, Pizzicato Strings, Marimba, Vibraphone, Acoustic Kit
+- ▶ next to every instrument and drum kit (Add Track and the Instrument tab) plays a short phrase or beat
+- ⬅ back arrow (and your mouse's back button) undoes the last change; the mouse's forward button redoes
+- Tempo automation: double-click a tempo point (or right-click → Type BPM) to type an exact BPM; typing in the BPM box changes the tempo point at the playhead
+- Tap tempo button next to BPM
+- Metronome sounds: Beep, Woodblock, Sticks, Cowbell, Hi-hat, Kick + hat, Soft
+- Select clips on different tracks with Ctrl+Shift-click (or Ctrl-click); drag, delete, copy/paste (Ctrl+C/V), duplicate (Ctrl+D) and split (Ctrl+S) work on the whole group
+- Audio track types: Vocals, Guitar, Bass, Drum Recording, Audio (other); change it in the Instrument tab
+- Sampler shows the recording's pitch (note, cents and Hz); Detect pitch also fine-tunes in cents
+- New songs start empty (no automatic Grand Piano track)
+
+## Earlier updates
 
 - Audio recordings loop too: use the ⟳ repeat handle on a take (click, drag, Shift-click, or right-click for the menu)
 - Select several tracks with Ctrl-click (or Shift-click for a range), then right-click a track header for Merge, Copy, Paste, Duplicate or Delete. Merging moves every clip onto the top track, which keeps its sound and effects.

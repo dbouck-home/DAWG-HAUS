@@ -17,6 +17,7 @@ export class Store {
     this.ui = {
       selectedTrackId: project.tracks[0]?.id || null,
       selectedClipId: null,
+      selectedClipIds: [], // extra clips picked with Ctrl+Shift-click (includes selectedClipId when active)
       snap: 'beat',
       pxPerQuarter: 48,
       mixerOpen: false,
@@ -83,6 +84,17 @@ export class Store {
     this.scheduleSave();
     this.emit('project');
   }
+
+  /** Ids of every selected clip (one, or several picked with Ctrl+Shift-click). */
+  clipSelection() {
+    const primary = this.ui.selectedClipId;
+    if (!primary) return [];
+    const ids = this.ui.selectedClipIds || [];
+    const exists = (id) => this.project.tracks.some((t) => t.clips.some((c) => c.id === id));
+    return ids.includes(primary) ? ids.filter(exists) : [primary];
+  }
+
+  isClipSelected(id) { return !!id && this.clipSelection().includes(id); }
 
   fixSelection() {
     const p = this.project;

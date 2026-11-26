@@ -28,6 +28,9 @@
 
   <div id="transport">
     <div class="group">
+      <button id="btn-back" class="tbtn back" title="Undo the last thing you did (Ctrl+Z, or your mouse's back button)">⬅</button>
+    </div>
+    <div class="group">
       <button id="btn-home" class="tbtn" title="Go to start (Home)">⏮</button>
       <button id="btn-stop" class="tbtn" title="Stop">■</button>
       <button id="btn-play" class="tbtn play" title="Play / Pause (Space)">▶</button>
@@ -45,6 +48,7 @@
         <span>BPM</span>
         <input id="inp-bpm" type="number" min="20" max="400" step="0.1" value="120">
       </label>
+      <button id="btn-tap" class="tbtn small-text" title="Tap tempo: click this in time with the music (4 or more taps)">Tap</button>
       <button id="btn-tempo-lane" class="tbtn toggle small-text" title="Show the tempo lane — add points to speed up or slow down the whole song">Tempo lane</button>
       <button id="btn-meter" class="meter-btn" title="Time signature at the playhead's bar">4/4</button>
       <label class="field">
@@ -52,8 +56,9 @@
         <select id="sel-snap"></select>
       </label>
       <label class="field">
-        <span>Click vol</span>
-        <input id="inp-click-vol" type="range" min="0" max="1" step="0.01" value="0.6">
+        <span>Click</span>
+        <select id="sel-click-sound" title="Metronome sound"></select>
+        <input id="inp-click-vol" type="range" min="0" max="1" step="0.01" value="0.6" title="Metronome volume">
       </label>
     </div>
     <div class="spacer"></div>

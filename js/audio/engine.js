@@ -108,6 +108,10 @@ class Channel {
   }
 }
 
+export const CLICK_SOUNDS = [
+  ['beep', 'Beep'], ['wood', 'Woodblock'], ['rim', 'Sticks'], ['cowbell', 'Cowbell'], ['hat', 'Hi-hat'], ['kick', 'Kick + hat'], ['soft', 'Soft'],
+];
+
 export class Engine {
   constructor(getProject) {
     this.getProject = getProject;
@@ -758,19 +762,68 @@ export class Engine {
 
   click(time, accent, dest = this.clickGain, loud = false) {
     const ctx = this.ctx;
-    const o = ctx.createOscillator();
+    const sound = this.getProject().metronome.sound || 'beep';
     const g = ctx.createGain();
-    o.type = 'sine';
-    o.frequency.value = accent === 2 ? 1760 : accent === 1 ? 1320 : 990;
-    const peak = accent === 2 ? 0.9 : accent === 1 ? 0.65 : 0.45;
-    g.gain.setValueAtTime(0, time);
-    g.gain.linearRampToValueAtTime(peak, time + 0.001);
-    g.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+    g.connect(dest);
     // count-in clicks play even if the metronome volume is turned all the way down
-    if (loud && this.getProject().metronome.volume < 0.3) g.gain.value *= 2;
-    o.connect(g).connect(dest);
-    o.start(time);
-    o.stop(time + 0.06);
+    const boost = loud && this.getProject().metronome.volume < 0.3 ? 2 : 1;
+    const peak = (accent === 2 ? 0.9 : accent === 1 ? 0.65 : 0.45) * boost;
+    const env = (target, attack, decay) => {
+      target.gain.setValueAtTime(0, time);
+      target.gain.linearRampToValueAtTime(peak, time + attack);
+      target.gain.exponentialRampToValueAtTime(0.001, time + attack + decay);
+    };
+    const osc = (type, f, dur, to = g) => {
+      const o = ctx.createOscillator();
+      o.type = type; o.frequency.value = f;
+      o.connect(to); o.start(time); o.stop(time + dur);
+      return o;
+    };
+    const noise = (dur, filterType, f, q = 1) => {
+      const len = Math.ceil(ctx.sampleRate * dur);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource(); src.buffer = buf;
+      const fl = ctx.createBiquadFilter(); fl.type = filterType; fl.frequency.value = f; fl.Q.value = q;
+      src.connect(fl).connect(g); src.start(time); src.stop(time + dur);
+    };
+    const hi = accent === 2 ? 1.33 : accent === 1 ? 1.15 : 1;
+    switch (sound) {
+      case 'wood': // woodblock
+        env(g, 0.001, 0.07);
+        osc('sine', 1100 * hi, 0.09);
+        osc('triangle', 2400 * hi, 0.05);
+        break;
+      case 'cowbell':
+        env(g, 0.001, 0.18);
+        { const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900 * hi; bp.Q.value = 1.5; bp.connect(g);
+          osc('square', 540 * hi, 0.2, bp); osc('square', 800 * hi, 0.2, bp); }
+        break;
+      case 'hat': // closed hi-hat
+        env(g, 0.001, accent ? 0.08 : 0.045);
+        noise(0.1, 'highpass', accent ? 6000 : 8000);
+        break;
+      case 'rim': // rim / sticks
+        env(g, 0.0005, 0.03);
+        osc('triangle', 1700 * hi, 0.04);
+        noise(0.03, 'bandpass', 3200, 2);
+        break;
+      case 'kick': // kick on the downbeat, hat on the others
+        if (accent === 2) {
+          const o = osc('sine', 150, 0.3);
+          o.frequency.setValueAtTime(150, time); o.frequency.exponentialRampToValueAtTime(45, time + 0.12);
+          env(g, 0.001, 0.25);
+        } else { env(g, 0.001, 0.05); noise(0.08, 'highpass', 7000); }
+        break;
+      case 'soft': // gentle low tick
+        env(g, 0.004, 0.08);
+        osc('sine', 660 * hi, 0.1);
+        break;
+      default: // classic beep
+        env(g, 0.001, 0.05);
+        osc('sine', accent === 2 ? 1760 : accent === 1 ? 1320 : 990, 0.06);
+    }
   }
 
   // ---------- live input ----------

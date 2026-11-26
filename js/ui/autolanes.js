@@ -1,9 +1,11 @@
 // Automation lanes in the arrangement: drawing and editing breakpoints.
-// Click empty space to add a point, drag points to move them, double-click or right-click a point to delete it.
+// Click empty space to add a point, drag points to move them, double-click a point to type its value
+// (e.g. an exact BPM), right-click a point for a menu (type value / delete).
 // Hold Alt while dragging to ignore the snap grid.
 import { targetInfo, valueAt, toNorm, fromNorm, formatValue, TEMPO_TARGET } from '../automation.js';
 import { fxParamDef } from '../audio/effects.js';
 import { colorForTrack } from '../audio/presets.js';
+import { promptText, popupMenu, toast } from './dom.js';
 
 export const AUTO_H = 60;
 
@@ -112,6 +114,9 @@ function drawPoint(g, x, y, color) {
 /**
  * Pointer editing for a lane row. timeline gives tick<->x conversion and snapping.
  */
+// rows are rebuilt after every edit, so double-clicks are detected here rather than with 'dblclick'
+let lastDown = { time: 0, lane: null, t: null };
+
 export function bindLaneRow(row, { store, timeline }) {
   const ctxFor = () => {
     const data = laneData(store.project, row.dataset.track, row.dataset.lane);
@@ -140,16 +145,45 @@ export function bindLaneRow(row, { store, timeline }) {
   };
   const commit = (points) => store.mutate((p) => setLanePoints(p, row.dataset.track, row.dataset.lane, points));
 
+  // typed values: percentages and pan are entered as -100..100, everything else in its own unit
+  const pct = (info) => info.key === 'pan' || (info.max <= 1 && info.min >= 0 && !info.unit);
+  const editValue = async (data, i) => {
+    const info = data.info;
+    const cur = data.points[i].v;
+    const shown = pct(info) ? Math.round(cur * 100) : Math.round(cur * 100) / 100;
+    const unit = info.unit || (pct(info) ? (info.key === 'pan' ? 'L −100 … R 100' : '%') : '');
+    const txt = await promptText(info.key === 'tempo' ? 'Tempo at this point' : `${info.label} at this point`, String(shown), unit || 'Value');
+    if (txt == null) return;
+    let v = parseFloat(String(txt).replace(',', '.'));
+    if (!Number.isFinite(v)) { toast('Please type a number.'); return; }
+    if (pct(info)) v /= 100;
+    const lo = info.min, hi = info.max;
+    if (v < lo || v > hi) toast(`Kept within ${formatValue(info, lo)} – ${formatValue(info, hi)}.`);
+    v = Math.min(hi, Math.max(lo, v));
+    commit(data.points.map((p, j) => (j === i ? { ...p, v } : p)));
+  };
+
   row.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const { data, rect } = ctxFor();
     const i = hitPoint(data, rect, e);
-    if (i >= 0) commit(data.points.filter((_, j) => j !== i));
+    if (i < 0) return;
+    popupMenu(e.clientX, e.clientY, [
+      { label: data.isTempo ? 'Type BPM…' : 'Type value…', onClick: () => editValue(data, i) },
+      { label: 'Delete point', onClick: () => commit(data.points.filter((_, j) => j !== i)) },
+    ]);
   });
+  // the point a click lands on, counting clicks that snapped onto an existing point's time
+  const pointAt = (data, rect, e) => {
+    const i = hitPoint(data, rect, e);
+    if (i >= 0) return i;
+    const t = e.altKey ? null : timeline.meter.snap(timeline.xToTick(e.clientX - rect.left), store.ui.snap);
+    return t == null ? -1 : data.points.findIndex((p) => p.t === t);
+  };
   row.addEventListener('dblclick', (e) => {
     const { data, rect } = ctxFor();
-    const i = hitPoint(data, rect, e);
-    if (i >= 0) commit(data.points.filter((_, j) => j !== i));
+    const i = pointAt(data, rect, e);
+    if (i >= 0) editValue(data, i);
   });
   row.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
@@ -157,7 +191,14 @@ export function bindLaneRow(row, { store, timeline }) {
     const { data, rect } = ctxFor();
     if (!data) return;
     let pts = data.points.map((p) => ({ ...p }));
-    let idx = hitPoint(data, rect, e);
+    let idx = pointAt(data, rect, e);
+    const now = performance.now();
+    const laneKey = `${row.dataset.track}|${row.dataset.lane}`;
+    if (idx >= 0 && now - lastDown.time < 450 && lastDown.lane === laneKey && lastDown.t === data.points[idx].t) {
+      lastDown = { time: 0, lane: null, t: null };
+      editValue(data, idx);
+      return;
+    }
     const snap = (clientX, alt) => {
       const tick = timeline.xToTick(clientX - rect.left);
       return alt ? Math.max(0, Math.round(tick)) : timeline.meter.snap(tick, store.ui.snap);
@@ -183,6 +224,7 @@ export function bindLaneRow(row, { store, timeline }) {
     const up = () => {
       row.removeEventListener('pointermove', move);
       row.removeEventListener('pointerup', up);
+      lastDown = { time: performance.now(), lane: laneKey, t: moving.t };
       commit(pts);
     };
     row.addEventListener('pointermove', move);

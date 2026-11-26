@@ -1,7 +1,7 @@
 // DAWG HAUS — app entry point. Wires the store, audio engine and UI together.
 import { MeterMap, TempoMap, SNAP_OPTIONS, VALID_DENOMINATORS, formatTime, parseGrouping, PPQ } from './timing.js';
 import { Store } from './store.js';
-import { Engine } from './audio/engine.js';
+import { Engine, CLICK_SOUNDS } from './audio/engine.js';
 import { PRESETS, CATEGORY_COLORS } from './audio/presets.js';
 import { growl } from './audio/growl.js';
 import { PianoRoll } from './ui/pianoroll.js';
@@ -10,7 +10,8 @@ import { BeatEditor } from './ui/drumeditor.js';
 import { FxPanel } from './ui/fxpanel.js';
 import { renderSong, encodeWav, encodeMp3, normalize, download, songEndTick } from './export.js';
 import { KITS, getKit } from './audio/drums.js';
-import { demoProject, newProject, newTrack, newClip, migrateProject, splitClip, uid } from './project.js';
+import { audition, stopAudition } from './audio/audition.js';
+import { AUDIO_KINDS, demoProject, newProject, newTrack, newClip, migrateProject, splitClip, uid } from './project.js';
 import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject, importEmbeddedAudio, saveAudio } from './storage.js';
 import { MidiInput, KEYMAP } from './midi.js';
 import { Timeline } from './ui/timeline.js';
@@ -90,6 +91,7 @@ async function boot() {
     renderTransportFields();
     $('btn-undo').disabled = !store.canUndo();
     $('btn-redo').disabled = !store.canRedo();
+    $('btn-back').disabled = !store.canUndo();
   }
 
   function renderTransportFields() {
@@ -102,13 +104,13 @@ async function boot() {
     $('btn-countin').classList.toggle('active', ci > 0);
     $('btn-metro').classList.toggle('active', p.metronome.enabled);
     $('inp-click-vol').value = p.metronome.volume;
+    $('sel-click-sound').value = p.metronome.sound || 'beep';
     $('btn-play').classList.toggle('active', engine.playing);
     $('btn-record').classList.toggle('active', engine.recording);
     for (const tab of ['pianoroll', 'instrument', 'effects', 'mixer', 'keyboard']) $(`btn-tab-${tab}`).classList.toggle('active', dock.open && dock.tab === tab);
     $('btn-tempo-lane').classList.toggle('active', !!store.ui.showTempo);
     $('btn-panels').classList.toggle('active', dock.open);
-    bpmInput.readOnly = p.tempos.length > 1;
-    bpmInput.title = p.tempos.length > 1 ? 'The tempo changes during this song — edit it in the Tempo lane' : 'Tempo in beats (quarter notes) per minute';
+    bpmInput.title = p.tempos.length > 1 ? 'The tempo changes during this song — typing here sets the tempo point at the playhead (or double-click a point in the Tempo lane)' : 'Tempo in beats (quarter notes) per minute';
     $('sel-snap').value = String(store.ui.snap);
     lastMeterLabel = null;
   }
@@ -137,6 +139,7 @@ async function boot() {
     if (kind === 'project' || kind === 'silent' || kind === 'load') {
       $('btn-undo').disabled = !store.canUndo();
       $('btn-redo').disabled = !store.canRedo();
+      $('btn-back').disabled = !store.canUndo();
     }
   });
   engine.on('transport', renderTransportFields);
@@ -199,15 +202,59 @@ async function boot() {
     setTimeout(() => logo.classList.remove('growling'), 1300);
   };
   $('btn-undo').onclick = () => store.undo();
+  $('btn-back').onclick = () => store.undo();
+  // mouse back/forward buttons = undo/redo (and never navigate away from the song)
+  window.addEventListener('mouseup', (e) => {
+    if (e.button === 3) { e.preventDefault(); if (!isModalOpen()) store.undo(); }
+    if (e.button === 4) { e.preventDefault(); if (!isModalOpen()) store.redo(); }
+  });
+  window.addEventListener('mousedown', (e) => { if (e.button === 3 || e.button === 4) e.preventDefault(); });
   $('btn-redo').onclick = () => store.redo();
+  /** Set the tempo: the song tempo, or — when the tempo is automated — the tempo point in effect at the playhead. */
+  function setTempo(v, { quiet = false } = {}) {
+    v = Math.round(Math.min(400, Math.max(20, v)) * 10) / 10;
+    const at = engine.currentTick();
+    let i = 0;
+    store.project.tempos.forEach((x, j) => { if (x.tick <= at) i = j; });
+    store.mutate((p) => { p.tempos[i].bpm = v; }, { merge: 'tempo-set' });
+    if (store.project.tempos.length > 1 && !quiet) {
+      const bar = new MeterMap(store.project.meters).tickToBBT(store.project.tempos[i].tick).bar;
+      toast(`Set the tempo point at bar ${bar} to ${v} BPM.`);
+    }
+    $('inp-bpm').value = v;
+  }
   $('inp-bpm').addEventListener('change', (e) => {
-    let v = parseFloat(e.target.value);
-    if (!Number.isFinite(v)) v = store.project.tempos[0].bpm;
-    v = Math.min(400, Math.max(20, v));
-    if (store.project.tempos.length > 1) return;
-    store.mutate((p) => { p.tempos[0].bpm = v; });
+    const v = parseFloat(e.target.value);
+    if (Number.isFinite(v)) setTempo(v);
     e.target.blur();
   });
+  // tap tempo
+  let taps = [];
+  $('btn-tap').onclick = () => {
+    const now = performance.now();
+    if (taps.length && now - taps[taps.length - 1] > 2000) taps = [];
+    taps.push(now);
+    if (taps.length > 8) taps.shift();
+    const btn = $('btn-tap');
+    btn.classList.add('active');
+    setTimeout(() => btn.classList.remove('active'), 90);
+    if (taps.length < 3) { btn.textContent = `Tap ${taps.length}`; return; }
+    const gaps = taps.slice(1).map((t, i) => t - taps[i]);
+    const avg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    const bpm = Math.round(60000 / avg * 10) / 10;
+    btn.textContent = `${Math.round(bpm)}`;
+    setTempo(bpm, { quiet: true });
+    clearTimeout(btn._reset);
+    btn._reset = setTimeout(() => { btn.textContent = 'Tap'; }, 2500);
+  };
+  // metronome sound
+  for (const [id, name] of CLICK_SOUNDS) $('sel-click-sound').append(h('option', { value: id }, name));
+  $('sel-click-sound').onchange = (e) => {
+    store.mutate((p) => { p.metronome.sound = e.target.value; });
+    engine.ensureContext();
+    engine.click(engine.ctx.currentTime + 0.02, 2);
+    engine.click(engine.ctx.currentTime + 0.35, 0);
+  };
   $('inp-bpm').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); });
   $('btn-meter').onclick = () => {
     const m = new MeterMap(store.project.meters);
@@ -329,10 +376,23 @@ async function boot() {
       if (clip) openClip(clip.id);
     };
     const body = h('div', {});
+    const play = (what) => h('span', {
+      class: 'audition', role: 'button', title: 'Hear it',
+      onclick: async (e) => {
+        e.stopPropagation();
+        const el = e.currentTarget;
+        body.querySelectorAll('.audition.playing').forEach((x) => x.classList.remove('playing'));
+        el.classList.add('playing', 'loading');
+        const secs = await audition(engine, what);
+        el.classList.remove('loading');
+        setTimeout(() => el.classList.remove('playing'), secs * 1000);
+      },
+    }, '▶');
     for (const cat of [...new Set(PRESETS.map((x) => x.category))]) {
       const g = h('div', { class: 'choice-grid' });
       for (const pr of PRESETS.filter((x) => x.category === cat)) {
         g.append(h('button', { class: 'choice', onclick: () => add('instrument', pr.id) },
+          play({ type: 'instrument', preset: pr.id }),
           h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS[pr.category] } }), pr.name),
           h('small', {}, `${pr.kind === 'sample' ? 'sampled' : 'synth'}${pr.mono ? ' · mono' : ''}`)));
       }
@@ -341,20 +401,23 @@ async function boot() {
     const drumGrid = h('div', { class: 'choice-grid' });
     for (const k of KITS) {
       drumGrid.append(h('button', { class: 'choice', onclick: () => add('drums', k.id) },
+        play({ type: 'drums', kit: k.id }),
         h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Drums } }), k.name),
-        h('small', {}, `drum machine · ${k.pads.length} pads`)));
+        h('small', {}, `${k.samples ? 'recorded kit' : 'drum machine'} · ${k.pads.length} pads`)));
     }
-    body.prepend(h('div', { class: 'section-label' }, 'Drums'), drumGrid);
+    const audioGrid = h('div', { class: 'choice-grid' });
+    for (const [kind, label, hint] of AUDIO_KINDS) {
+      audioGrid.append(h('button', { class: 'choice', onclick: () => add('audio', kind) },
+        h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Audio } }), label),
+        h('small', {}, hint)));
+    }
+    body.prepend(h('div', { class: 'section-label' }, 'Drums'), drumGrid,
+      h('div', { class: 'section-label' }, 'Audio (record from a mic or interface)'), audioGrid);
     body.append(h('div', { class: 'section-label' }, 'Sampler'), h('div', { class: 'choice-grid' },
       h('button', { class: 'choice', onclick: () => { add('sampler'); dock.show('instrument'); } },
         h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Sampler } }), 'Sampler'),
         h('small', {}, 'record or import a sound, play it on the keys'))));
-    body.append(h('div', { class: 'section-label' }, 'Audio'), h('div', { class: 'choice-grid' },
-      h('button', { class: 'choice', onclick: () => add('audio') },
-        h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Audio } }), 'Audio Track'),
-        h('small', {}, 'vocals & mics · recording in Phase 5'))),
-      h('div', { class: 'hint', style: { marginTop: '10px' } }, ''));
-    closeFn = openModal({ title: 'Add a track', body, buttons: [{ label: 'Cancel' }], width: '720px' });
+    closeFn = openModal({ title: 'Add a track', body, buttons: [{ label: 'Cancel' }], width: '760px', onClose: stopAudition });
   };
 
   // ---------- export ----------
@@ -480,7 +543,6 @@ async function boot() {
     engine.stop();
     await store.saveNow();
     const p = newProject();
-    p.tracks.push(newTrack('instrument', 'grand-piano'));
     store.load(p);
     toast('New song created.');
   }
@@ -590,7 +652,9 @@ async function boot() {
     const sel = store.findClip(store.ui.selectedClipId);
     let targets = [];
     // the selected clip wins, as long as it's on the selected track
-    if (sel && sel.track.id === store.ui.selectedTrackId && at > sel.clip.start && at < sel.clip.start + sel.clip.length) targets = [{ track: sel.track, clip: sel.clip }];
+    const group = store.clipSelection().map((id) => store.findClip(id)).filter((f) => f && at > f.clip.start && at < f.clip.start + f.clip.length);
+    if (group.length > 1) targets = group;
+    else if (sel && sel.track.id === store.ui.selectedTrackId && at > sel.clip.start && at < sel.clip.start + sel.clip.length) targets = [{ track: sel.track, clip: sel.clip }];
     else {
       const t = store.selectedTrack();
       if (t) targets = t.clips.filter((c) => at > c.start && at < c.start + c.length).map((c) => ({ track: t, clip: c }));
@@ -650,6 +714,14 @@ async function boot() {
   }
 
   function copySelection() {
+    const group = store.clipSelection();
+    if (store.ui.focus === 'clip' && group.length > 1) {
+      const items = group.map((id) => store.findClip(id)).filter(Boolean);
+      const first = Math.min(...items.map((f) => f.clip.start));
+      clipboard = { kind: 'clips', items: items.map((f) => ({ trackId: f.track.id, offset: f.clip.start - first, clip: JSON.parse(JSON.stringify(f.clip)) })) };
+      toast(`Copied ${items.length} clips — Ctrl+V pastes them at the playhead on the same tracks.`);
+      return;
+    }
     if (store.ui.focus === 'clip' && store.ui.selectedClipId) {
       const f = store.findClip(store.ui.selectedClipId);
       if (f) { clipboard = { kind: 'clip', trackType: family(f.track), clip: JSON.parse(JSON.stringify(f.clip)) }; toast('Copied the clip — Ctrl+V pastes it at the playhead on the selected track.'); return; }
@@ -671,6 +743,26 @@ async function boot() {
       });
       store.setUI({ selectedTrackId: copies[0].id, selectedTrackIds: copies.map((t) => t.id) });
       toast(`Pasted ${copies.length} track${copies.length === 1 ? '' : 's'}.`);
+      return;
+    }
+    if (clipboard.kind === 'clips') {
+      const m = new MeterMap(store.project.meters);
+      const at = m.snap(engine.currentTick(), store.ui.snap === 'off' ? 'beat' : store.ui.snap);
+      const ids = [];
+      store.mutate((p) => {
+        for (const it of clipboard.items) {
+          const tr = p.tracks.find((x) => x.id === it.trackId);
+          if (!tr) continue;
+          const c = { ...JSON.parse(JSON.stringify(it.clip)), id: uid('clp'), start: at + it.offset };
+          tr.clips.push(c);
+          ids.push(c.id);
+        }
+      });
+      if (!ids.length) { toast('The tracks those clips came from are gone.'); return; }
+      store.ui.selectedClipIds = ids;
+      store.ui.selectedClipId = ids[0];
+      store.ui.focus = 'clip';
+      timeline.updateSelection();
       return;
     }
     const t = store.selectedTrack();
@@ -711,18 +803,29 @@ async function boot() {
   }
 
   function deleteClip() {
-    const id = store.ui.selectedClipId;
-    if (!id) return;
-    store.mutate((p) => { for (const t of p.tracks) t.clips = t.clips.filter((c) => c.id !== id); });
+    const ids = store.clipSelection();
+    if (!ids.length) return;
+    store.mutate((p) => { for (const t of p.tracks) t.clips = t.clips.filter((c) => !ids.includes(c.id)); });
     store.ui.selectedClipId = null;
+    store.ui.selectedClipIds = [];
   }
 
   function duplicateClip() {
-    const found = store.findClip(store.ui.selectedClipId);
-    if (!found) return;
-    const copy = { ...JSON.parse(JSON.stringify(found.clip)), id: newClip(0, 0).id, start: found.clip.start + found.clip.length };
-    store.mutate((p) => { p.tracks.find((t) => t.id === found.track.id).clips.push(copy); });
-    store.ui.selectedClipId = copy.id;
+    const items = store.clipSelection().map((id) => store.findClip(id)).filter(Boolean);
+    if (!items.length) return;
+    // a group is copied as a block, right after its last clip ends
+    const first = Math.min(...items.map((f) => f.clip.start));
+    const span = Math.max(...items.map((f) => f.clip.start + f.clip.length)) - first;
+    const ids = [];
+    store.mutate((p) => {
+      for (const f of items) {
+        const copy = { ...JSON.parse(JSON.stringify(f.clip)), id: newClip(0, 0).id, start: f.clip.start + span };
+        p.tracks.find((t) => t.id === f.track.id).clips.push(copy);
+        ids.push(copy.id);
+      }
+    });
+    store.ui.selectedClipIds = ids;
+    store.ui.selectedClipId = ids[0];
     timeline.updateSelection();
   }
 

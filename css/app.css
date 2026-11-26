@@ -394,3 +394,22 @@ button { cursor: pointer; }
 .th.multi.selected { background: #23344a; }
 
 .credits { white-space: pre-wrap; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; max-height: 60vh; overflow: auto; margin: 0; color: var(--text, #ddd); }
+
+.tbtn.back { font-size: 20px; color: var(--accent, #7bafd4); }
+.tbtn.back:disabled { opacity: 0.35; }
+
+.choice { position: relative; }
+.choice .audition { position: absolute; right: 6px; top: 6px; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 10px; background: rgba(123,175,212,0.18); color: var(--accent, #7bafd4); cursor: pointer; }
+.choice .audition:hover { background: rgba(123,175,212,0.4); }
+.choice .audition.playing { background: var(--accent, #7bafd4); color: #0b1620; }
+.choice .audition.loading { animation: pulse 0.8s infinite alternate; }
+@keyframes pulse { from { opacity: 0.4; } to { opacity: 1; } }
+
+.inst-btn .chip-play { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-right: 5px; border-radius: 50%; font-size: 8px;
+  background: rgba(123,175,212,0.18); color: var(--accent, #7bafd4); vertical-align: 1px; }
+.inst-btn .chip-play:hover { background: rgba(123,175,212,0.45); }
+.inst-btn .chip-play.playing { background: var(--accent, #7bafd4); color: #0b1620; }
+
+.pitch-readout { align-self: center; font-size: 12px; padding: 2px 8px; border-radius: 4px; background: rgba(123,175,212,0.12); }
+.pitch-readout.off { background: rgba(255,176,32,0.15); }

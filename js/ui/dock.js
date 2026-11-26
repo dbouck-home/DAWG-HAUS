@@ -2,8 +2,37 @@
 import { PRESETS, CATEGORY_COLORS, getPreset, paramDefs, paramValue, colorForTrack } from '../audio/presets.js';
 import { KEYMAP } from '../midi.js';
 import { KITS, getKit, PAD_PARAMS, padSetting } from '../audio/drums.js';
+import { audition } from '../audio/audition.js';
+import { AUDIO_KINDS } from '../project.js';
+
+/** "Pitch: A3 +12¢ · 220.8 Hz" for the part of the recording between the markers */
+function pitchReadout(buf, s) {
+  if (!buf) return null;
+  const f = detectPitchExact(buf, s.start, s.end > s.start ? s.end : buf.duration);
+  if (f == null) return h('span', { class: 'pitch-readout muted', title: 'No steady pitch found (drums and noises have none)' }, 'Pitch: —');
+  const r = Math.round(f);
+  const cents = Math.round((f - r) * 100);
+  const hz = 440 * Math.pow(2, (f - 69) / 12);
+  const off = r !== s.root || cents !== (s.fine || 0);
+  return h('span', { class: `pitch-readout ${off ? 'off' : ''}`, title: off ? 'The root note setting doesn’t match — press Detect pitch to fix it' : 'The keyboard plays this sound in tune' },
+    'Pitch: ', h('b', {}, noteName(r)), ` ${cents >= 0 ? '+' : ''}${cents}¢ · ${hz.toFixed(1)} Hz`);
+}
+
+/** small ▶ inside a picker button: hear the instrument/kit without choosing it */
+function playChip(engine, what) {
+  return h('span', {
+    class: 'chip-play', role: 'button', title: 'Hear it',
+    onclick: async (e) => {
+      e.stopPropagation();
+      const el = e.currentTarget;
+      el.classList.add('playing');
+      const secs = await audition(engine, what);
+      setTimeout(() => el.classList.remove('playing'), secs * 1000);
+    },
+  }, '▶');
+}
 import { noteName, TempoMap } from '../timing.js';
-import { SAMPLER_DEFAULTS, detectTrim, detectPitch } from '../audio/sampleinst.js';
+import { SAMPLER_DEFAULTS, detectTrim, detectPitch, detectPitchExact } from '../audio/sampleinst.js';
 import { saveAudio } from '../storage.js';
 import { h } from './dom.js';
 
@@ -103,7 +132,7 @@ export class InstrumentPanel {
     if (t?.type === 'audio') { this.renderAudio(t); return; }
     if (t?.type === 'sampler') { this.renderSampler(t); return; }
     if (!t || t.type !== 'instrument') {
-      this.root.append(h('div', { class: 'pane-empty' }, t ? 'Audio tracks get their settings in Phase 5.' : 'Select an instrument track.'));
+      this.root.append(h('div', { class: 'pane-empty' }, 'Select a track to see its sound settings.'));
       return;
     }
     const pr = getPreset(t.instrument.preset);
@@ -119,7 +148,7 @@ export class InstrumentPanel {
             const x = pp.tracks.find((y) => y.id === t.id);
             x.instrument = { preset: p.id, params: {} };
           }),
-        }, p.name, p.kind === 'synth' ? h('small', {}, ' synth') : null));
+        }, playChip(this.engine, { type: 'instrument', preset: p.id }), p.name, p.kind === 'synth' ? h('small', {}, ' synth') : null));
       }
       pick.append(group);
     }
@@ -167,7 +196,7 @@ export class InstrumentPanel {
           onclick: () => this.store.mutate((pp) => { pp.tracks.find((y) => y.id === t.id).instrument.params = {}; }),
         }, 'Reset settings')),
       h('div', { class: 'inst-body' }, pick, h('div', { class: 'inst-right' }, params,
-        h('div', { class: 'hint' }, 'Chorus, delay, distortion, reverb and the other effects come in Phase 4 as per-track effects with automation.'))));
+        h('div', { class: 'hint' }, 'Press ▶ on any instrument to hear it before switching. Effects live in the Effects tab.'))));
   }
 }
 
@@ -251,7 +280,11 @@ InstrumentPanel.prototype.renderAudio = function renderAudio(t) {
   this.root.append(
     h('div', { class: 'inst-head' },
       h('span', { class: 'dot', style: { background: colorForTrack(t) } }), h('b', {}, t.name),
-      h('span', { class: 'muted' }, eng.input ? ` · 🎙 ${eng.input.label}` : ' · input off')),
+      h('span', { class: 'muted' }, eng.input ? ` · 🎙 ${eng.input.label}` : ' · input off'),
+      h('div', { class: 'spacer' }),
+      h('label', { class: 'field', title: 'What this track records — it names the track, and Drum Recording tracks can be turned into MIDI' }, h('span', {}, 'Type'),
+        h('select', { onchange: (e) => this.store.mutate((pp) => { pp.tracks.find((y) => y.id === t.id).audioKind = e.target.value; }) },
+          AUDIO_KINDS.map(([id, label]) => h('option', { value: id, selected: (t.audioKind || 'other') === id }, label))))),
     h('div', { class: 'inst-body' }, left, right));
 };
 
@@ -272,8 +305,9 @@ InstrumentPanel.prototype.renderSampler = function renderSampler(t) {
     buf.copyToChannel(data, 0);
     eng.audioBuffers.set(audioId, buf);
     const trim = detectTrim(buf);
-    const root = detectPitch(buf, trim.start, trim.end) ?? 60;
-    set({ audioId, name, start: trim.start, end: trim.end, root });
+    const f = detectPitchExact(buf, trim.start, trim.end);
+    const root = f == null ? 60 : Math.round(f);
+    set({ audioId, name, start: trim.start, end: trim.end, root, fine: f == null ? 0 : Math.round((f - root) * 100) });
   };
 
   const left = h('div', { class: 'inst-right' });
@@ -390,13 +424,19 @@ InstrumentPanel.prototype.renderSampler = function renderSampler(t) {
       h('button', { class: 'pbtn', disabled: !buf, title: 'Move the markers to where the sound starts and ends', onclick: () => { const tr = detectTrim(buf); set({ start: tr.start, end: tr.end }); } }, '✂ Auto-trim'),
       h('button', {
         class: 'pbtn', disabled: !buf, title: 'Detect the sound\u2019s pitch so the keyboard plays it in tune',
-        onclick: () => { const p = detectPitch(buf, s.start, s.end > s.start ? s.end : buf.duration); if (p != null) set({ root: p }); else alert('No clear pitch found — set the root note by hand.'); },
-      }, '🎯 Detect pitch')),
+        onclick: () => {
+          const f = detectPitchExact(buf, s.start, s.end > s.start ? s.end : buf.duration);
+          if (f == null) { alert('No clear pitch found — set the root note by hand.'); return; }
+          const r = Math.round(f);
+          set({ root: r, fine: Math.round((f - r) * 100) });
+        },
+      }, '🎯 Detect pitch'),
+      pitchReadout(buf, s)),
     h('div', { class: 'hint' }, 'Drag the START and END markers on the waveform to choose the part that plays.'));
   requestAnimationFrame(() => drawWave());
 
   // --- settings ---
-  const rootSel = h('select', { onchange: (e) => set({ root: +e.target.value }) });
+  const rootSel = h('select', { onchange: (e) => set({ root: +e.target.value, fine: 0 }) });
   for (let p = 24; p <= 96; p++) rootSel.append(h('option', { value: p, selected: p === s.root }, noteName(p)));
   const slider = (label, key, min, max, step, fmt) => {
     const lab = h('span', { class: 'pval' }, fmt(s[key]));
@@ -433,7 +473,7 @@ InstrumentPanel.prototype.renderDrums = function renderDrums(t) {
     group.append(h('button', {
       class: `inst-btn ${k.id === kit.id ? 'active' : ''}`,
       onclick: () => this.store.mutate((pp) => { pp.tracks.find((y) => y.id === t.id).drums = { kit: k.id, pads: {} }; }),
-    }, k.name, h('small', {}, ` ${k.pads.length} pads`)));
+    }, playChip(this.engine, { type: 'drums', kit: k.id }), k.name, h('small', {}, ` ${k.pads.length} pads`)));
   }
   pick.append(group);
   const table = h('div', { class: 'padtable' }, h('span', { class: 'hd' }, 'Pad'), PAD_PARAMS.map((d) => h('span', { class: 'hd' }, d.label)));

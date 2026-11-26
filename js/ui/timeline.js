@@ -98,7 +98,7 @@ export class Timeline {
   }
 
   renderClip(track, clip, color) {
-    const sel = clip.id === this.store.ui.selectedClipId;
+    const sel = this.store.isClipSelected(clip.id);
     const x = this.tickToX(clip.start);
     const w = Math.max(6, this.tickToX(clip.length));
     const el = h('div', {
@@ -327,7 +327,8 @@ export class Timeline {
   updateSelection() {
     const { selectedTrackId, selectedClipId } = this.store.ui;
     this.rows.querySelectorAll('.lane').forEach((l) => l.classList.toggle('selected', l.dataset.track === selectedTrackId));
-    this.rows.querySelectorAll('.clip').forEach((c) => c.classList.toggle('selected', c.dataset.clip === selectedClipId));
+    const sel = new Set(this.store.clipSelection());
+    this.rows.querySelectorAll('.clip').forEach((c) => c.classList.toggle('selected', sel.has(c.dataset.clip)));
   }
 
   // ---------- loop strip ----------
@@ -564,6 +565,36 @@ export class Timeline {
     });
   }
 
+  /** Drag several selected clips together (time only; each stays on its own track). */
+  groupDrag(e, clip, ids) {
+    const startX = e.clientX;
+    const snap = this.store.ui.snap;
+    const els = ids.map((id) => this.rows.querySelector(`.clip[data-clip="${id}"]`)).filter(Boolean);
+    const starts = new Map(ids.map((id) => [id, this.store.findClip(id)?.clip.start ?? 0]));
+    const minStart = Math.min(...starts.values());
+    let delta = 0;
+    let moved = false;
+    const target = e.target.closest('.clip');
+    target.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      if (Math.abs(ev.clientX - startX) > 3) moved = true;
+      if (!moved) return;
+      const ns = this.meter.snap(clip.start + this.xToTick(ev.clientX - startX), snap);
+      delta = Math.max(-minStart, ns - clip.start);
+      for (const el of els) el.style.left = `${this.tickToX(starts.get(el.dataset.clip) + delta)}px`;
+    };
+    const up = () => {
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', up);
+      if (!moved || !delta) return;
+      this.store.mutate((p) => {
+        for (const t of p.tracks) for (const c of t.clips) if (starts.has(c.id)) c.start = starts.get(c.id) + delta;
+      });
+    };
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', up);
+  }
+
   bindLanes() {
     this.rows.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
@@ -580,13 +611,30 @@ export class Timeline {
       const found = this.store.findClip(clipEl.dataset.clip);
       if (!found) return;
       const { clip, track } = found;
-      this.store.ui.selectedTrackId = track.id;
-      this.store.ui.selectedTrackIds = [track.id];
-      this.store.ui.selectedClipId = clip.id;
-      this.rows.querySelectorAll('.clip.selected').forEach((c) => c.classList.remove('selected'));
-      clipEl.classList.add('selected');
-      this.rows.querySelectorAll('.lane').forEach((l) => l.classList.toggle('selected', l.dataset.track === track.id));
+      const ui = this.store.ui;
+      // Ctrl+Shift-click (or Ctrl-click) adds/removes clips — on any track — to the selection
+      if ((e.ctrlKey || e.metaKey) && !e.target.dataset.resize && !e.target.dataset.repeat) {
+        const cur = this.store.clipSelection();
+        let ids = cur.includes(clip.id) ? cur.filter((id) => id !== clip.id) : [...cur, clip.id];
+        if (!ids.length) ids = [clip.id];
+        ui.selectedClipIds = ids;
+        ui.selectedClipId = ids.includes(clip.id) ? clip.id : ids[ids.length - 1];
+        const f2 = this.store.findClip(ui.selectedClipId);
+        ui.selectedTrackId = f2.track.id;
+        ui.selectedTrackIds = [f2.track.id];
+        this.updateSelection();
+        this.store.emit('selection');
+        return;
+      }
+      const group = this.store.clipSelection();
+      const groupDrag = group.length > 1 && group.includes(clip.id) && !e.target.dataset.resize && !e.target.dataset.repeat;
+      ui.selectedTrackId = track.id;
+      ui.selectedTrackIds = [track.id];
+      ui.selectedClipId = clip.id;
+      if (!groupDrag) ui.selectedClipIds = [clip.id];
+      this.updateSelection();
       this.store.emit('selection');
+      if (groupDrag) { this.groupDrag(e, clip, group); return; }
 
       if (e.target.dataset.repeat) { this.repeatDrag(e, clipEl, clip, track); return; }
       const resizing = !!e.target.dataset.resize;
@@ -644,7 +692,7 @@ export class Timeline {
     });
 
     this.rows.addEventListener('contextmenu', (e) => {
-      if (!e.target.dataset?.repeat) return;
+      if (!e.target.dataset?.repeat) { this.onClipMenu?.(e); return; }
       const found = this.store.findClip(e.target.closest('.clip').dataset.clip);
       if (found) this.repeatMenu(e, found.clip, found.track);
     });

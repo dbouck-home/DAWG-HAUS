@@ -10,8 +10,17 @@ export function uid(prefix = 'id') {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-4)}`;
 }
 
+/** Kinds of audio track: [id, label, hint]. The label is what the track calls itself. */
+export const AUDIO_KINDS = [
+  ['vocals', 'Vocals', 'singing, rap, voice-over'],
+  ['guitar', 'Guitar', 'electric or acoustic'],
+  ['bass', 'Bass', 'bass guitar or upright'],
+  ['drums', 'Drum Recording', 'real drums — can be turned into MIDI'],
+  ['other', 'Audio', 'anything else'],
+];
+
 export function baseLabel(track) {
-  if (track.type === 'audio') return 'Audio';
+  if (track.type === 'audio') return (AUDIO_KINDS.find((k) => k[0] === track.audioKind) || AUDIO_KINDS[4])[1];
   if (track.type === 'drums') return getKit(track.drums?.kit).name;
   if (track.type === 'sampler') return track.sampler?.name ? `Sampler · ${track.sampler.name}` : 'Sampler';
   return getPreset(track.instrument?.preset).name;
@@ -49,6 +58,7 @@ export function newTrack(type = 'instrument', preset = 'soft-keys') {
   if (type === 'instrument') t.instrument = { preset, params: {} };
   if (type === 'drums') t.drums = { kit: preset || '808', pads: {} };
   if (type === 'sampler') t.sampler = { ...SAMPLER_DEFAULTS };
+  if (type === 'audio') t.audioKind = AUDIO_KINDS.some((k) => k[0] === preset) ? preset : 'other';
   return t;
 }
 
