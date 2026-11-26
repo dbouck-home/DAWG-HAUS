@@ -1,8 +1,9 @@
 // Bottom dock: Piano Roll, Instrument, Mixer and on-screen Keyboard tabs.
 import { PRESETS, CATEGORY_COLORS, getPreset, paramDefs, paramValue, colorForTrack } from '../audio/presets.js';
 import { KEYMAP } from '../midi.js';
-import { KITS, getKit, PAD_PARAMS, padSetting } from '../audio/drums.js';
+import { KITS, getKit, kitFor, PAD_PARAMS, padSetting } from '../audio/drums.js';
 import { audition } from '../audio/audition.js';
+import { detectDrumHits } from '../audio/analyze.js';
 import { AUDIO_KINDS } from '../project.js';
 
 /** "Pitch: A3 +12¢ · 220.8 Hz" for the part of the recording between the markers */
@@ -34,7 +35,7 @@ function playChip(engine, what) {
 import { noteName, TempoMap } from '../timing.js';
 import { SAMPLER_DEFAULTS, detectTrim, detectPitch, detectPitchExact } from '../audio/sampleinst.js';
 import { saveAudio } from '../storage.js';
-import { h } from './dom.js';
+import { h, promptText } from './dom.js';
 
 export const DOCK_TABS = [
   { id: 'pianoroll', label: 'Editor' },
@@ -467,14 +468,14 @@ InstrumentPanel.prototype.renderSampler = function renderSampler(t) {
 };
 
 InstrumentPanel.prototype.renderDrums = function renderDrums(t) {
-  const kit = getKit(t.drums.kit);
+  const kit = kitFor(t);
   const pick = h('div', { class: 'inst-pick' });
   const group = h('div', { class: 'inst-cat' }, h('div', { class: 'inst-cat-name', style: { color: CATEGORY_COLORS.Drums } }, 'Drum kits'));
   for (const k of KITS) {
     group.append(h('button', {
       class: `inst-btn ${k.id === kit.id ? 'active' : ''}`,
-      onclick: () => this.store.mutate((pp) => { pp.tracks.find((y) => y.id === t.id).drums = { kit: k.id, pads: {} }; }),
-    }, playChip(this.engine, { type: 'drums', kit: k.id }), k.name, h('small', {}, ` ${k.pads.length} pads`)));
+      onclick: () => this.store.mutate((pp) => { const x = pp.tracks.find((y) => y.id === t.id); x.drums = { ...x.drums, kit: k.id, pads: {} }; }),
+    }, k.sampled ? null : playChip(this.engine, { type: 'drums', kit: k.id }), k.name, h('small', {}, k.sampled ? ' your sounds' : ` ${k.pads.length} pads`)));
   }
   pick.append(group);
   const table = h('div', { class: 'padtable' }, h('span', { class: 'hd' }, 'Pad'), PAD_PARAMS.map((d) => h('span', { class: 'hd' }, d.label)));
@@ -501,14 +502,144 @@ InstrumentPanel.prototype.renderDrums = function renderDrums(t) {
       }));
     }
   }
+  const right = h('div', { class: 'inst-right' });
+  if (kit.sampled) right.append(this.samplePads(t, kit));
   this.root.append(
     h('div', { class: 'inst-head' },
       h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Drums } }), h('b', {}, t.name),
-      h('span', { class: 'muted' }, ` · ${kit.name} (synthesized drum machine)`),
+      h('span', { class: 'muted' }, ` · ${kit.name} (${kit.sampled ? 'your recorded sounds' : kit.samples ? 'recorded kit' : 'synthesized drum machine'})`),
       h('div', { class: 'spacer' }),
       h('button', { class: 'pbtn', onclick: () => this.store.mutate((pp) => { pp.tracks.find((y) => y.id === t.id).drums.pads = {}; }) }, 'Reset pads')),
-    h('div', { class: 'inst-body' }, pick, h('div', { class: 'inst-right' }, table,
-      h('div', { class: 'hint' }, 'Patterns keep working when you switch kits — every kit uses the standard General MIDI drum notes, so MIDI drum pads play the right sounds too.'))));
+    h('div', { class: 'inst-body' }, pick, right));
+  right.append(table,
+    h('div', { class: 'hint' }, kit.sampled
+      ? 'Fill pads with your own sounds, then double-click a clip on this track to build a beat in the beat editor. Pads play on MIDI notes C1–D#2 and the computer keys A, W, S, E…'
+      : 'Patterns keep working when you switch kits — every kit uses the standard General MIDI drum notes, so MIDI drum pads play the right sounds too.'));
+};
+
+/** The 4×4 pad grid of the Sample Drum Machine: record, import, chop and trim each pad's sound. */
+InstrumentPanel.prototype.samplePads = function samplePads(t, kit) {
+  const eng = this.engine;
+  const samples = t.drums.samples || {};
+  const setPad = (note, val) => this.store.mutate((pp) => {
+    const x = pp.tracks.find((y) => y.id === t.id);
+    const smp = { ...(x.drums.samples || {}) };
+    if (val) smp[note] = val; else delete smp[note];
+    x.drums = { ...x.drums, samples: smp };
+  });
+  const store = async (data, sampleRate) => {
+    const audioId = `aud_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    await saveAudio({ id: audioId, sampleRate, data });
+    const buf = eng.ctx.createBuffer(1, data.length, sampleRate);
+    buf.copyToChannel(data, 0);
+    eng.audioBuffers.set(audioId, buf);
+    return { audioId, buf };
+  };
+  const openMic = async () => {
+    const devId = this.store.project.tracks.find((x) => x.type === 'audio' && x.input?.deviceId)?.input.deviceId;
+    await eng.openInput(devId);
+  };
+  const record = async (onStart) => {
+    try { await openMic(); } catch (e) { alert(`The microphone could not be opened: ${e.message}`); return null; }
+    onStart?.();
+    const res = await eng.startSampleRecording();
+    return res && res.data.length > res.sampleRate * 0.05 ? res : null;
+  };
+  const decodeFile = async (f) => {
+    eng.ensureContext();
+    const buf = await eng.ctx.decodeAudioData(await f.arrayBuffer());
+    const mono = new Float32Array(buf.length);
+    for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) mono[i] += d[i] / buf.numberOfChannels; }
+    return { data: mono, sampleRate: buf.sampleRate };
+  };
+  const fillPad = async (note, data, sampleRate, name) => {
+    const { audioId, buf } = await store(data, sampleRate);
+    const tr = detectTrim(buf);
+    setPad(note, { audioId, name: name.slice(0, 14), start: tr.start, end: tr.end });
+    setTimeout(() => eng.preview(t.id, note, 110, 0.5), 50);
+  };
+  // chop one recording into pads at each hit (beatbox, a sample break, a pile of one-shots…)
+  const chop = async (data, sampleRate, label) => {
+    const { audioId, buf } = await store(data, sampleRate);
+    const hits = detectDrumHits(buf, 0, buf.duration, 0.6);
+    const starts = [];
+    for (const hit of hits) if (!starts.length || hit.time - starts[starts.length - 1] > 0.08) starts.push(Math.max(0, hit.time - 0.005));
+    if (!starts.length) { alert('No separate hits were found in that recording.'); return; }
+    const pads = kit.pads.map((p) => p.note);
+    const free = pads.filter((n) => !samples[n]?.audioId);
+    const targets = (free.length >= Math.min(starts.length, 16) ? free : pads).slice(0, Math.min(16, starts.length));
+    this.store.mutate((pp) => {
+      const x = pp.tracks.find((y) => y.id === t.id);
+      const smp = { ...(x.drums.samples || {}) };
+      targets.forEach((note, i) => {
+        const st = starts[i];
+        const en = Math.min(buf.duration, starts[i + 1] ?? buf.duration, st + 2.5);
+        smp[note] = { audioId, name: `${label} ${i + 1}`, start: st, end: en };
+      });
+      x.drums = { ...x.drums, samples: smp };
+    });
+  };
+
+  const grid = h('div', { class: 'spads' });
+  const fileIn = h('input', { type: 'file', accept: 'audio/*,.wav,.mp3,.ogg,.m4a,.flac', hidden: true });
+  let fileTarget = null;
+  fileIn.onchange = async () => {
+    const f = fileIn.files?.[0];
+    fileIn.value = '';
+    if (!f) return;
+    try {
+      const { data, sampleRate } = await decodeFile(f);
+      const name = f.name.replace(/\.[^.]+$/, '');
+      if (fileTarget === 'chop') await chop(data, sampleRate, name.slice(0, 8));
+      else await fillPad(fileTarget, data, sampleRate, name);
+    } catch { alert('That file could not be read as audio.'); }
+  };
+  // rows from the top: pads 13–16 … 1–4, like a hardware pad grid
+  const order = [12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3];
+  for (const i of order) {
+    const pad = kit.pads[i];
+    const smp = samples[pad.note];
+    const recBtn = h('button', { class: 'sp-act', title: 'Record this pad from the microphone (click again to stop)' }, '●');
+    recBtn.onclick = async (e) => {
+      e.stopPropagation();
+      if (eng.sampleRec) { eng.stopSampleRecording(); return; }
+      const res = await record(() => { recBtn.classList.add('recording'); recBtn.textContent = '■'; });
+      if (res) await fillPad(pad.note, res.data, res.sampleRate, `Rec ${i + 1}`); else this.render();
+    };
+    const cell = h('div', {
+      class: `spad ${smp?.audioId ? 'full' : 'empty'}`,
+      title: smp?.audioId ? `${smp.name} — click to play` : 'Empty pad — ● record, 📁 import a file',
+      onpointerdown: (e) => { if (e.target.closest('.sp-act')) return; if (smp?.audioId) eng.preview(t.id, pad.note, 110, 0.3); },
+    },
+    h('div', { class: 'sp-num' }, String(i + 1)),
+    h('div', { class: 'sp-name' }, smp?.audioId ? smp.name : '—'),
+    h('div', { class: 'sp-btns' },
+      recBtn,
+      h('button', { class: 'sp-act', title: 'Load an audio file onto this pad', onclick: (e) => { e.stopPropagation(); fileTarget = pad.note; fileIn.click(); } }, '📁'),
+      smp?.audioId ? h('button', {
+        class: 'sp-act', title: 'Rename this pad',
+        onclick: async (e) => { e.stopPropagation(); const v = await promptText('Pad name', smp.name); if (v?.trim()) setPad(pad.note, { ...smp, name: v.trim().slice(0, 14) }); },
+      }, '✎') : null,
+      smp?.audioId ? h('button', { class: 'sp-act', title: 'Clear this pad', onclick: (e) => { e.stopPropagation(); setPad(pad.note, null); } }, '✕') : null));
+    grid.append(cell);
+  }
+  const chopRec = h('button', { class: 'pbtn', title: 'Record several sounds in a row (e.g. beatbox kick, snare, hat…) — each hit goes onto its own pad' }, '🎙 Record & chop into pads');
+  chopRec.onclick = async () => {
+    if (eng.sampleRec) { eng.stopSampleRecording(); return; }
+    const t0 = Date.now();
+    let timer = null;
+    const res = await record(() => {
+      chopRec.classList.add('recording');
+      timer = setInterval(() => { const sec = (Date.now() - t0) / 1000; chopRec.textContent = `■ Stop (${sec.toFixed(1)} s)`; if (sec > 30) eng.stopSampleRecording(); }, 100);
+    });
+    clearInterval(timer);
+    if (res) await chop(res.data, res.sampleRate, 'Hit'); else this.render();
+  };
+  return h('div', { class: 'spads-wrap' },
+    h('div', { class: 'pgroup wrap' }, chopRec,
+      h('button', { class: 'pbtn', title: 'Split an audio file into pads at each hit', onclick: () => { fileTarget = 'chop'; fileIn.click(); } }, '📁 Chop a file into pads'),
+      h('span', { class: 'muted' }, `${Object.values(samples).filter((x) => x?.audioId).length} / 16 pads filled`), fileIn),
+    grid);
 };
 
 // ---------- on-screen keyboard ----------
@@ -610,7 +741,7 @@ export class OnscreenKeyboard {
   }
 
   renderPads(t) {
-    const kit = getKit(t.drums.kit);
+    const kit = kitFor(t);
     const keyNames = Object.keys(KEYMAP).map((c) => c.replace('Key', '').replace('Semicolon', ';'));
     const grid = h('div', { class: 'pads' });
     kit.pads.forEach((pad, i) => {

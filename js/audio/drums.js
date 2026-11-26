@@ -339,8 +339,20 @@ export const KITS = [
   },
 ];
 
+// Sample Drum Machine: 16 pads you fill with your own recordings (track.drums.samples[note] = { audioId, name, start, end })
+const SAMPLED_PADS = Array.from({ length: 16 }, (_, i) => P(36 + i, `Pad ${i + 1}`, 'sample'));
+KITS.push({ id: 'sampled', name: 'Sample Drum Machine', sampled: true, pads: SAMPLED_PADS });
+
 export function getKit(id) {
   return KITS.find((k) => k.id === id) || KITS[0];
+}
+
+/** The kit a track plays — for the Sample Drum Machine, pads are named after their sounds. */
+export function kitFor(track) {
+  const kit = getKit(track?.drums?.kit);
+  if (!kit.sampled) return kit;
+  const smp = track.drums.samples || {};
+  return { ...kit, pads: kit.pads.map((p) => ({ ...p, name: smp[p.note]?.name || p.name, empty: !smp[p.note]?.audioId })) };
 }
 
 export const PAD_PARAMS = [
@@ -357,8 +369,9 @@ export function padSetting(track, note, key) {
 
 // ---------- the instrument ----------
 export class DrumKit {
-  constructor(ctx, track, output) {
+  constructor(ctx, track, output, getBuffer) {
     this.ctx = ctx;
+    this.getBuffer = getBuffer; // (audioId) => AudioBuffer | null, for the Sample Drum Machine
     this.output = output;
     this.kitOut = ctx.createGain();
     this.chokeVoices = new Map();
@@ -399,6 +412,8 @@ export class DrumKit {
 
   pad(note) { return this.kit.pads.find((p) => p.note === note); }
 
+  // 'sampled' pads read their sounds from the track; keep the latest copy
+
   noteOn(note, velocity = 100, time = this.ctx.currentTime) {
     const pad = this.pad(note);
     if (!pad) return null;
@@ -433,19 +448,29 @@ export class DrumKit {
   }
 
   playSample(note, out, t, v, s) {
-    const buf = this.buffers?.get(note);
-    if (!buf) return null;
+    let buf; let from = 0; let to;
+    if (this.kit.sampled) {
+      const smp = this.track.drums?.samples?.[note];
+      buf = smp?.audioId ? this.getBuffer?.(smp.audioId) : null;
+      if (!buf) return null;
+      from = Math.max(0, smp.start || 0);
+      to = smp.end > from ? Math.min(smp.end, buf.duration) : buf.duration;
+    } else {
+      buf = this.buffers?.get(note);
+      if (!buf) return null;
+      to = buf.duration;
+    }
     const ctx = this.ctx;
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = Math.pow(2, (s.tune || 0) / 12);
     const g = ctx.createGain();
-    const len = buf.duration / src.playbackRate.value * Math.min(1, s.decay ?? 1);
+    const len = (to - from) / src.playbackRate.value * Math.min(1, s.decay ?? 1);
     g.gain.setValueAtTime(v, t);
     g.gain.setValueAtTime(v, t + Math.max(0.01, len - 0.05));
     g.gain.linearRampToValueAtTime(0, t + len);
     src.connect(g).connect(out);
-    src.start(t);
+    src.start(t, from);
     src.stop(t + len + 0.01);
     return { stop(at) { try { g.gain.cancelScheduledValues(at); g.gain.setTargetAtTime(0, at, 0.01); src.stop(at + 0.08); } catch { /* ended */ } } };
   }

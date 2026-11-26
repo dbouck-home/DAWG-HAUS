@@ -9,7 +9,7 @@ import { Dock, InstrumentPanel, OnscreenKeyboard } from './ui/dock.js';
 import { BeatEditor } from './ui/drumeditor.js';
 import { FxPanel } from './ui/fxpanel.js';
 import { renderSong, encodeWav, encodeMp3, normalize, download, songEndTick } from './export.js';
-import { KITS, getKit } from './audio/drums.js';
+import { KITS, getKit, kitFor } from './audio/drums.js';
 import { audition, stopAudition } from './audio/audition.js';
 import { openTuner } from './ui/tuner.js';
 import { ChordPad, keyName, NOTE_NAMES } from './ui/chords.js';
@@ -277,17 +277,22 @@ async function boot() {
     if (engine.recording) { engine.stopRecording(); return; }
     const t = store.selectedTrack();
     if (!t) { toast('Select a track to record onto.'); return; }
-    if (t.type === 'audio') {
+    const armed = store.project.tracks.filter((x) => x.type === 'audio' && x.armed);
+    if (t.type === 'audio' || armed.length) {
+      // multitrack: every armed audio track records from its own input; otherwise just the selected one
+      const list = armed.length ? armed : [t];
+      const takes = [];
       try {
-        await engine.openInput(t.input?.deviceId, t.input?.channel || 'both');
+        if (t.type === 'audio') await engine.openInput(t.input?.deviceId, t.input?.channel || 'both');
+        for (const x of list) takes.push({ trackId: x.id, input: await engine.inputFor(x.input?.deviceId, x.input?.channel || 'both') });
       } catch (e) {
         toast('The microphone is blocked — allow it in Chrome (the camera/mic icon in the address bar).');
         return;
       }
-      engine.syncInput(t.id);
+      engine.syncInput(t.type === 'audio' ? t.id : undefined);
       if (!engine.playing) engine.play(engine.positionTick, { countInBars: store.project.countIn || 0 });
-      engine.startAudioRecording(t.id);
-      toast(`Recording audio on "${t.name}" — press ● or R again to stop.`);
+      engine.startAudioRecording(takes);
+      toast(list.length > 1 ? `Recording ${list.length} tracks at once (${list.map((x) => x.name).join(', ')}) — press ● or R again to stop.` : `Recording audio on "${list[0].name}" — press ● or R again to stop.`);
       if (dock.open && dock.tab === 'instrument') instPanel.render();
       return;
     }
@@ -409,7 +414,7 @@ async function boot() {
       body.append(h('div', { class: 'section-label' }, cat), g);
     }
     const drumGrid = h('div', { class: 'choice-grid' });
-    for (const k of KITS) {
+    for (const k of KITS.filter((x) => !x.sampled)) {
       drumGrid.append(h('button', { class: 'choice', onclick: () => add('drums', k.id) },
         play({ type: 'drums', kit: k.id }),
         h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Drums } }), k.name),
@@ -425,8 +430,11 @@ async function boot() {
       h('div', { class: 'section-label' }, 'Audio (record from a mic or interface)'), audioGrid);
     body.append(h('div', { class: 'section-label' }, 'Sampler'), h('div', { class: 'choice-grid' },
       h('button', { class: 'choice', onclick: () => { add('sampler'); dock.show('instrument'); } },
-        h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Sampler } }), 'Sampler'),
-        h('small', {}, 'record or import a sound, play it on the keys'))));
+        h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Sampler } }), 'Sample Keyboard'),
+        h('small', {}, 'record or import one sound, play it on the keys')),
+      h('button', { class: 'choice', onclick: () => { add('drums', 'sampled'); dock.show('instrument'); } },
+        h('b', {}, h('span', { class: 'dot', style: { background: CATEGORY_COLORS.Drums } }), 'Sample Drum Machine'),
+        h('small', {}, 'record up to 16 sounds onto pads, build a beat'))));
     closeFn = openModal({ title: 'Add a track', body, buttons: [{ label: 'Cancel' }], width: '760px', onClose: stopAudition });
   };
 
@@ -713,7 +721,7 @@ async function boot() {
       let pitch = 12 * (store.ui.octave + 1) + KEYMAP[e.code];
       if (sel.type === 'drums') {
         // computer keys play the kit's pads in order: A = first pad, W = second, ...
-        const pad = getKit(sel.drums.kit).pads[KEYMAP[e.code]];
+        const pad = kitFor(sel).pads[KEYMAP[e.code]];
         if (!pad) return;
         pitch = pad.note;
       }

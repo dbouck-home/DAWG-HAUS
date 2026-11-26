@@ -40,6 +40,9 @@ Installed copies pick up the update the next time they're opened.
 - Chords tab: omnichord-style chord buttons in the song's key (keys 1–7, Shift = 7th), all major/minor/7th chords, Hold/Latch/Strum modes, and a strum plate to sweep with the mouse
 - Right-click a clip or a track → Find tempo & key: detects BPM (recordings) and key (recordings and MIDI), with buttons to apply them to the song
 - Dialogs inside dialogs: Enter/Escape now only affect the top one
+- Two samplers in + Add Track: Sample Keyboard (one sound across the keys) and Sample Drum Machine (16 pads: ● record or 📁 load a sound per pad, or "Record & chop into pads" / "Chop a file into pads" to split one recording at each hit; then build a beat in the beat editor)
+- Multitrack recording: press ● on several audio track headers to arm them, give each its own input / channel in the Instrument tab, then press R — they all record at once
+- Right-click a recorded drum take (or its track) → Make MIDI drum track: finds the kicks, snares and hi-hats, snaps them to the grid if you like, and writes a new drum-machine track (and mutes the original)
 
 ## Earlier updates
 

@@ -120,6 +120,15 @@ export function tuningHzAt(p, tick) {
 }
 export const hzToCents = (hz) => 1200 * Math.log2(hz / 440);
 
+function joinChunks(chunks) {
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const all = new Float32Array(total);
+  let o = 0;
+  for (const c of chunks) { all.set(c, o); o += c.length; }
+  return all;
+}
+
 export class Engine {
   constructor(getProject) {
     this.getProject = getProject;
@@ -204,10 +213,11 @@ export class Engine {
         if (!(ch.instrument instanceof DrumKit)) {
           if (ch.instrument instanceof SampleInstrument) ch.presetId = null;
           ch.instrument?.dispose();
-          ch.instrument = new DrumKit(this.ctx, t, ch.input);
+          ch.instrument = new DrumKit(this.ctx, t, ch.input, (id) => this.audioBuffers.get(id) || (this.loadAudioBuffer(id), null));
           ch.presetId = null;
           ch.paramKey = key;
         } else if (key !== ch.paramKey) { ch.instrument.setTrack(t); ch.paramKey = key; }
+        for (const smp of Object.values(t.drums?.samples || {})) if (smp?.audioId && !this.audioBuffers.has(smp.audioId)) this.loadAudioBuffer(smp.audioId);
       }
       if (t.type === 'sampler') {
         const key = JSON.stringify(t.sampler || {});
@@ -564,27 +574,35 @@ export class Engine {
    * channel: 'both' (mix the first two inputs), '1' (input 1 / left) or '2' (input 2 / right) —
    * audio interfaces usually put a mic on just one of their inputs.
    */
+  /**
+   * Open (or reuse) an input: a device + channel. The "current" input (this.input) drives the meter,
+   * monitoring, tuner and sampler; armed tracks for multitrack recording get their own via inputFor().
+   */
   async openInput(deviceId, channel = 'both') {
+    const inp = await this.inputFor(deviceId, channel);
+    const prev = this.input;
+    this.input = inp;
+    if (prev && prev !== inp && !this.inputInUse(prev)) this.dropInput(prev);
+    this.syncInput();
+    return inp.label;
+  }
+
+  /** Is an input recording, or wanted by an armed track? */
+  inputInUse(inp) {
+    if (this.audioRec?.recs.some((r) => r.input === inp)) return true;
+    const p = this.getProject();
+    return p.tracks.some((t) => t.type === 'audio' && t.armed && `${t.input?.deviceId || ''}|${t.input?.channel || 'both'}` === inp.key);
+  }
+
+  async inputFor(deviceId, channel = 'both') {
     this.ensureContext();
     await this.workletsReady;
-    const live = this.input?.stream.getAudioTracks().some((tr) => tr.readyState === 'live');
-    if (this.input && live && this.input.deviceId === (deviceId || '') && this.input.channel === channel) return this.input.label;
-    this.closeInput();
-    const constraints = (id) => ({
-      audio: {
-        deviceId: id ? { exact: id } : undefined,
-        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
-        channelCount: { ideal: 2 },
-      },
-    });
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia(constraints(deviceId));
-    } catch (e) {
-      // the saved device is gone (unplugged) — fall back to the default input
-      if (deviceId && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) stream = await navigator.mediaDevices.getUserMedia(constraints(''));
-      else throw e;
-    }
+    this.inputs ||= new Map();
+    const key = `${deviceId || ''}|${channel}`;
+    const have = this.inputs.get(key);
+    if (have && have.stream.getAudioTracks().some((tr) => tr.readyState === 'live')) return have;
+    if (have) this.dropInput(have);
+    const stream = await this.streamFor(deviceId || '');
     const ctx = this.ctx;
     const src = ctx.createMediaStreamSource(stream);
     const gain = ctx.createGain();
@@ -609,18 +627,53 @@ export class Engine {
     recorder.connect(monitor);
     const track = stream.getAudioTracks()[0];
     const settings = track.getSettings?.() || {};
-    this.input = {
-      stream, src, gain, analyser, recorder, monitor, sink, deviceId: deviceId || '', channel, channels: chCount,
+    const inp = {
+      key, stream, src, gain, analyser, recorder, monitor, sink, deviceId: deviceId || '', channel, channels: chCount,
       label: track.label || 'Microphone', latency: settings.latency || 0.01, buf: new Float32Array(1024), monitorTo: null,
     };
-    recorder.port.onmessage = (e) => this.onRecorderMessage(e.data);
-    this.syncInput();
-    return this.input.label;
+    recorder.port.onmessage = (e) => this.onRecorderMessage(e.data, inp);
+    this.inputs.set(key, inp);
+    return inp;
+  }
+
+  /** One getUserMedia stream per device, shared by its channels. */
+  async streamFor(deviceId) {
+    this.streams ||= new Map();
+    const have = this.streams.get(deviceId);
+    if (have && have.getAudioTracks().some((tr) => tr.readyState === 'live')) return have;
+    const constraints = (id) => ({
+      audio: {
+        deviceId: id ? { exact: id } : undefined,
+        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+        channelCount: { ideal: 2 },
+      },
+    });
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints(deviceId));
+    } catch (e) {
+      // the saved device is gone (unplugged) — fall back to the default input
+      if (deviceId && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) stream = await navigator.mediaDevices.getUserMedia(constraints(''));
+      else throw e;
+    }
+    this.streams.set(deviceId, stream);
+    return stream;
+  }
+
+  dropInput(inp) {
+    try { inp.src.disconnect(); inp.recorder.disconnect(); inp.monitor.disconnect(); } catch { /* ignore */ }
+    this.inputs?.delete(inp.key);
+    // stop the device when nothing uses it any more
+    const stillUsed = [...(this.inputs?.values() || [])].some((x) => x.deviceId === inp.deviceId);
+    if (!stillUsed) {
+      this.streams?.get(inp.deviceId)?.getTracks().forEach((tr) => tr.stop());
+      this.streams?.delete(inp.deviceId);
+    }
   }
 
   closeInput() {
     if (!this.input) return;
-    try { this.input.stream.getTracks().forEach((tr) => tr.stop()); this.input.src.disconnect(); this.input.recorder.disconnect(); } catch { /* ignore */ }
+    if (!this.audioRec) for (const inp of [...(this.inputs?.values() || [])]) this.dropInput(inp);
     this.input = null;
   }
 
@@ -632,21 +685,25 @@ export class Engine {
     return m;
   }
 
-  /** Route the mic to the selected audio track when monitoring is on; apply input gain. */
+  /** Route inputs to their audio tracks when monitoring is on; apply input gain. */
   syncInput(selectedTrackId = this.monitorTrackId) {
     this.monitorTrackId = selectedTrackId;
-    const inp = this.input;
-    if (!inp) return;
+    if (!this.inputs) return;
     const p = this.getProject();
-    const t = p.tracks.find((x) => x.id === selectedTrackId && x.type === 'audio');
-    inp.gain.gain.setTargetAtTime(dbToGain(t?.input?.gain ?? 0), this.ctx.currentTime, 0.02);
-    const target = t && t.input?.monitor ? this.channels.get(t.id)?.input : null;
-    if (inp.monitorTo !== target) {
-      try { inp.monitor.disconnect(); } catch { /* ignore */ }
-      if (target) inp.monitor.connect(target);
-      inp.monitorTo = target;
+    const keyOf = (t) => `${t.input?.deviceId || ''}|${t.input?.channel || 'both'}`;
+    for (const inp of this.inputs.values()) {
+      // the selected track uses the current input; armed tracks use the input matching their settings
+      let t = inp === this.input ? p.tracks.find((x) => x.id === selectedTrackId && x.type === 'audio') : null;
+      if (!t) t = p.tracks.find((x) => x.type === 'audio' && x.armed && keyOf(x) === inp.key);
+      inp.gain.gain.setTargetAtTime(dbToGain(t?.input?.gain ?? 0), this.ctx.currentTime, 0.02);
+      const target = t && t.input?.monitor ? this.channels.get(t.id)?.input : null;
+      if (inp.monitorTo !== target) {
+        try { inp.monitor.disconnect(); } catch { /* ignore */ }
+        if (target) inp.monitor.connect(target);
+        inp.monitorTo = target;
+      }
+      inp.monitor.gain.setTargetAtTime(target ? 1 : 0, this.ctx.currentTime, 0.02);
     }
-    inp.monitor.gain.setTargetAtTime(target ? 1 : 0, this.ctx.currentTime, 0.02);
   }
 
   /** Seconds between a sound being played and the same moment arriving back through the mic. */
@@ -663,13 +720,21 @@ export class Engine {
     return Math.max(0, tempo.secToTick(tempo.tickToSec(a.tick) + (time - a.time)));
   }
 
-  startAudioRecording(trackId) {
-    if (!this.input || !this.playing) return false;
+  /**
+   * Record audio. `takes` = [{ trackId, input }] — several tracks at once for multitrack recording
+   * (e.g. a mic on input 1 and a guitar on input 2). A bare trackId records on the current input.
+   */
+  startAudioRecording(takes) {
+    if (typeof takes === 'string') takes = this.input ? [{ trackId: takes, input: this.input }] : [];
+    if (!takes.length || !this.playing) return false;
     const startTime = Math.max(this.anchors[0].time, this.ctx.currentTime + 0.02);
-    this.audioRec = { trackId, startTime, startTick: Math.round(this.tickAtTime(startTime)), chunks: [], t0: null, sampleRate: this.ctx.sampleRate };
-    this.input.recorder.port.postMessage({ cmd: 'start' });
+    const startTick = Math.round(this.tickAtTime(startTime));
+    const recs = takes.map(({ trackId, input }) => ({ trackId, input, startTime, startTick, chunks: [], t0: null, sampleRate: this.ctx.sampleRate }));
+    this.audioRec = { recs, startTime };
+    // one recorder per input — two tracks on the same input share it
+    for (const inp of new Set(recs.map((r) => r.input))) inp.recorder.port.postMessage({ cmd: 'start' });
     this.recording = true;
-    this.recordTrackId = trackId;
+    this.recordTrackId = recs[0].trackId;
     this.emit('transport');
     return true;
   }
@@ -677,7 +742,7 @@ export class Engine {
   /** Record a sample from the mic (no transport needed). Resolves with { data, sampleRate } on stop. */
   startSampleRecording() {
     if (!this.input) return false;
-    this.sampleRec = { chunks: [], t0: null, startTime: this.ctx.currentTime + 0.02 };
+    this.sampleRec = { chunks: [], t0: null, startTime: this.ctx.currentTime + 0.02, input: this.input };
     this.sampleRec.done = new Promise((res) => { this.sampleRec.resolve = res; });
     this.input.recorder.port.postMessage({ cmd: 'start' });
     return this.sampleRec.done;
@@ -685,50 +750,45 @@ export class Engine {
 
   stopSampleRecording() {
     if (!this.sampleRec) return;
-    this.input?.recorder.port.postMessage({ cmd: 'stop' });
+    this.sampleRec.input.recorder.port.postMessage({ cmd: 'stop' });
   }
 
-  onRecorderMessage(m) {
-    if (this.sampleRec) {
+  onRecorderMessage(m, inp) {
+    if (this.sampleRec && this.sampleRec.input === inp) {
       const r = this.sampleRec;
       if (m.type === 'started') r.t0 = m.time;
       else if (m.type === 'data') r.chunks.push(m.data);
       else if (m.type === 'stopped') {
         this.sampleRec = null;
-        let total = 0;
-        for (const c of r.chunks) total += c.length;
-        const all = new Float32Array(total);
-        let o = 0;
-        for (const c of r.chunks) { all.set(c, o); o += c.length; }
-        r.resolve({ data: all, sampleRate: this.ctx.sampleRate });
+        r.resolve({ data: joinChunks(r.chunks), sampleRate: this.ctx.sampleRate });
       }
       return;
     }
-    const r = this.audioRec;
-    if (!r) return;
-    if (m.type === 'started') r.t0 = m.time;
-    else if (m.type === 'data') r.chunks.push(m.data);
-    else if (m.type === 'stopped') this.finishAudioRecording();
+    if (!this.audioRec) return;
+    const recs = this.audioRec.recs.filter((r) => r.input === inp);
+    for (const r of recs) {
+      if (m.type === 'started') r.t0 = m.time;
+      else if (m.type === 'data') r.chunks.push(m.data);
+      else if (m.type === 'stopped') { r.done = true; this.finishTake(r); }
+    }
+    if (m.type === 'stopped' && this.audioRec.recs.every((r) => r.done)) {
+      this.audioRec = null;
+      this.recording = false;
+      this.emit('transport');
+    }
   }
 
   stopAudioRecording() {
     if (!this.audioRec || this.audioRec.stopping) return;
     this.audioRec.stopping = true;
-    this.audioRec.endTime = this.ctx.currentTime;
-    this.input?.recorder.port.postMessage({ cmd: 'stop' });
+    const end = this.ctx.currentTime;
+    for (const r of this.audioRec.recs) r.endTime = end;
+    for (const inp of new Set(this.audioRec.recs.map((r) => r.input))) inp.recorder.port.postMessage({ cmd: 'stop' });
   }
 
-  finishAudioRecording() {
-    const r = this.audioRec;
-    this.audioRec = null;
-    this.recording = false;
-    this.emit('transport');
-    if (!r || r.t0 == null) return;
-    let total = 0;
-    for (const c of r.chunks) total += c.length;
-    const all = new Float32Array(total);
-    let o = 0;
-    for (const c of r.chunks) { all.set(c, o); o += c.length; }
+  finishTake(r) {
+    if (r.t0 == null) return;
+    const all = joinChunks(r.chunks);
     // skip what came in before the take started, plus the round-trip latency
     const skip = Math.max(0, Math.round((r.startTime - r.t0 + this.recordLatency) * r.sampleRate));
     const wanted = Math.max(0, Math.round((r.endTime - r.startTime) * r.sampleRate));

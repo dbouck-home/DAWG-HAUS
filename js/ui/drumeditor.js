@@ -2,7 +2,7 @@
 // Click a cell to add or remove a hit (drag to paint). Shift-click = accent, Alt-click = soft hit.
 // Click a pad name to hear it and to show its velocities in the lane below.
 import { PPQ, MeterMap } from '../timing.js';
-import { getKit, PATTERNS } from '../audio/drums.js';
+import { getKit, kitFor, PATTERNS } from '../audio/drums.js';
 import { CATEGORY_COLORS } from '../audio/presets.js';
 import { h, toast } from './dom.js';
 import { setup, ensureNoteIds } from './pianoroll.js';
@@ -39,7 +39,7 @@ export class BeatEditor {
   get found() { return this.clipId ? this.store.findClip(this.clipId) : null; }
   get clip() { return this.found?.clip || null; }
   get track() { return this.found?.track || null; }
-  get kit() { return getKit(this.track?.drums?.kit); }
+  get kit() { return kitFor(this.track); }
   get notes() { return this.work || this.clip?.notes || []; }
   get ppt() { return (this.cellW / (PPQ / 4)); }
   get meter() { return new MeterMap(this.store.project.meters); }

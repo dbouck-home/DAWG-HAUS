@@ -109,7 +109,7 @@ export class TrackHeaders {
         : t.type === 'drums'
           ? h('select', {
             class: 'kit', title: 'Drum kit', onpointerdown: (e) => e.stopPropagation(),
-            onchange: (e) => this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).drums = { kit: e.target.value, pads: {} }; }),
+            onchange: (e) => this.store.mutate((p) => { p.tracks.find((x) => x.id === t.id).drums = { ...(p.tracks.find((x) => x.id === t.id).drums || {}), kit: e.target.value, pads: {} }; }),
           }, KITS.map((k) => h('option', { value: k.id, selected: k.id === t.drums.kit }, k.name)))
           : t.type === 'sampler'
             ? h('button', { class: 'pbtn smp-btn', title: 'Open the sampler settings', onclick: (e) => { e.stopPropagation(); this.onShowInstrument?.(t.id); } },
@@ -119,7 +119,16 @@ export class TrackHeaders {
               class: `sb mon ${t.input?.monitor ? 'active' : ''}`, title: 'Monitoring: hear yourself through this track (use headphones)',
               onclick: (e) => { e.stopPropagation(); this.store.mutate((p) => { const x = p.tracks.find((y) => y.id === t.id); x.input = { ...(x.input || {}), monitor: !x.input?.monitor }; }); },
             }, '🎧'),
-            ` 🎙 ${t.clips.length ? `${t.clips.length} take${t.clips.length === 1 ? '' : 's'}` : 'select + R to record'}`);
+            h('button', {
+              class: `sb arm ${t.armed ? 'active' : ''}`, title: 'Arm for recording: every armed track records at once (each from its own input) when you press ● or R',
+              onclick: (e) => {
+                e.stopPropagation();
+                this.store.mutate((p) => { const x = p.tracks.find((y) => y.id === t.id); x.armed = !x.armed; });
+                // open the track's input now so its level shows and monitoring works before recording
+                if (!t.armed) this.engine.inputFor(t.input?.deviceId, t.input?.channel || 'both').then(() => this.engine.syncInput()).catch(() => {});
+              },
+            }, '●'),
+            ` ${t.armed ? `armed${t.input?.channel && t.input.channel !== 'both' ? ` · in ${t.input.channel}` : ''}` : t.clips.length ? `${t.clips.length} take${t.clips.length === 1 ? '' : 's'}` : 'select + R to record'}`);
       const el = h('div', {
         class: `th ${selected ? 'selected' : ''}`,
         'data-track': t.id,
