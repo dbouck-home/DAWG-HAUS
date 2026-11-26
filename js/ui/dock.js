@@ -42,6 +42,7 @@ export const DOCK_TABS = [
   { id: 'effects', label: 'Effects' },
   { id: 'mixer', label: 'Mixer' },
   { id: 'keyboard', label: 'Keyboard' },
+  { id: 'chords', label: 'Chords' },
 ];
 
 export class Dock {
@@ -521,6 +522,40 @@ export class OnscreenKeyboard {
     this.keys = new Map();
     this.down = new Set();
     engine.on('live', (p, on) => this.light(p, on));
+    engine.on('bend', (v) => this.showBend?.(v));
+  }
+
+  /** Pitch-bend wheel: drag up/down, springs back to the middle when let go. */
+  bendWheel() {
+    const range = () => this.store.ui.bendRange || 2;
+    const knob = h('div', { class: 'bend-knob' });
+    const slot = h('div', { class: 'bend-slot', title: 'Pitch bend — drag up or down; it springs back when you let go' }, h('div', { class: 'bend-mid' }), knob);
+    const readout = h('div', { class: 'bend-val' }, '0');
+    const show = (v) => {
+      knob.style.top = `${50 - v * 42}%`;
+      readout.textContent = v === 0 ? '0' : `${v > 0 ? '+' : ''}${(v * range()).toFixed(1)}`;
+    };
+    this.showBend = show;
+    const apply = (v) => { const id = this.liveTrack(); if (id) this.engine.liveBend(id, v * range()); show(v); };
+    let dragging = false;
+    const fromY = (y) => { const r = slot.getBoundingClientRect(); return Math.max(-1, Math.min(1, ((r.top + r.height / 2) - y) / (r.height * 0.42))); };
+    slot.addEventListener('pointerdown', (e) => { dragging = true; slot.setPointerCapture(e.pointerId); apply(fromY(e.clientY)); });
+    slot.addEventListener('pointermove', (e) => { if (dragging) apply(fromY(e.clientY)); });
+    const release = () => {
+      if (!dragging) return;
+      dragging = false;
+      // glide back to centre like a real spring-loaded wheel
+      const id = this.liveTrack();
+      if (id) this.engine.liveBend(id, 0);
+      knob.classList.add('spring'); show(0);
+      setTimeout(() => knob.classList.remove('spring'), 160);
+    };
+    slot.addEventListener('pointerup', release);
+    slot.addEventListener('pointercancel', release);
+    const rangeSel = h('select', { class: 'bend-range', title: 'How far the wheel bends', onchange: (e) => { this.store.ui.bendRange = +e.target.value; } },
+      [1, 2, 7, 12].map((n) => h('option', { value: n, selected: n === range() }, `±${n}`)));
+    show(0);
+    return h('div', { class: 'bend' }, h('div', { class: 'bend-label' }, 'Bend'), slot, readout, rangeSel);
   }
 
   render() {
@@ -571,7 +606,7 @@ export class OnscreenKeyboard {
         h('span', { class: 'muted' }, `${noteName(start)} – ${noteName(end)}`),
         h('button', { class: 'pbtn', onclick: () => { this.store.ui.octave = Math.min(7, oct + 1); this.store.emit('ui'); } }, 'Octave ▶'),
         h('span', { class: 'muted' }, t && t.type === 'instrument' ? ` · playing ${t.name} (click, drag across keys, or use the letters shown)` : ' · select an instrument track to play')),
-      wrap);
+      h('div', { class: 'okb-row' }, this.bendWheel(), wrap));
   }
 
   renderPads(t) {

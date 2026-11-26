@@ -11,8 +11,11 @@ import { FxPanel } from './ui/fxpanel.js';
 import { renderSong, encodeWav, encodeMp3, normalize, download, songEndTick } from './export.js';
 import { KITS, getKit } from './audio/drums.js';
 import { audition, stopAudition } from './audio/audition.js';
+import { openTuner } from './ui/tuner.js';
+import { ChordPad, keyName, NOTE_NAMES } from './ui/chords.js';
+import { analyzeAudio, keyFromNotes, detectDrumHits } from './audio/analyze.js';
 import { AUDIO_KINDS, demoProject, newProject, newTrack, newClip, migrateProject, splitClip, uid } from './project.js';
-import { loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject, importEmbeddedAudio, saveAudio } from './storage.js';
+import { updateProjectMeta, savedFolders, setSavedFolders, imageToCover, loadProject, lastProjectId, listProjects, deleteProject, exportProjectFile, pickProjectFile, saveProject, importEmbeddedAudio, saveAudio } from './storage.js';
 import { MidiInput, KEYMAP } from './midi.js';
 import { Timeline } from './ui/timeline.js';
 import { TrackHeaders, Mixer } from './ui/tracks.js';
@@ -54,6 +57,7 @@ async function boot() {
   Object.assign(store.ui, { showTempo: false });
   const liveTrackId = () => { const t = store.selectedTrack(); return t && t.type !== 'audio' ? t.id : null; };
   const onscreenKb = new OnscreenKeyboard({ store, engine, root: $('kb-root'), liveTrack: liveTrackId });
+  const chordPad = new ChordPad({ store, engine, root: $('chord-root'), liveTrack: () => { const t = store.selectedTrack(); return t && (t.type === 'instrument' || t.type === 'sampler') ? t.id : null; } });
   const dock = new Dock({ store, onChange: () => { renderDock(); renderTransportFields(); timeline.layout(); } });
 
   function renderDock() {
@@ -63,6 +67,7 @@ async function boot() {
     if (dock.tab === 'effects') fxPanel.render();
     if (dock.tab === 'mixer') mixer.render();
     if (dock.tab === 'keyboard') onscreenKb.render();
+    if (dock.tab === 'chords') chordPad.render();
   }
 
   function openClip(id) {
@@ -77,13 +82,15 @@ async function boot() {
     dock.show('pianoroll');
     editor().active = true;
   }
-  window.dawgHaus = { store, engine }; // handy for debugging
+  window.dawgHaus = { store, engine, renderAll, timeline }; // handy for debugging
   let lastMeterLabel = null;
 
   // ---------- rendering ----------
   function renderAll() {
     const p = store.project;
     $('project-name').textContent = p.name;
+    $('project-cover').hidden = !p.cover;
+    if (p.cover) $('project-cover').style.backgroundImage = `url(${p.cover})`;
     document.title = `${p.name} — DAWG HAUS`;
     headers.render();
     timeline.render();
@@ -105,9 +112,12 @@ async function boot() {
     $('btn-metro').classList.toggle('active', p.metronome.enabled);
     $('inp-click-vol').value = p.metronome.volume;
     $('sel-click-sound').value = p.metronome.sound || 'beep';
+    { const a4 = p.tuning?.a4 || 440; const auto = p.tuning?.points?.length;
+      $('btn-tuning').textContent = auto ? 'A4 ~' : `A ${+a4.toFixed(1)}`;
+      $('btn-tuning').classList.toggle('active', a4 !== 440 || !!auto || !!store.ui.showTuning); }
     $('btn-play').classList.toggle('active', engine.playing);
     $('btn-record').classList.toggle('active', engine.recording);
-    for (const tab of ['pianoroll', 'instrument', 'effects', 'mixer', 'keyboard']) $(`btn-tab-${tab}`).classList.toggle('active', dock.open && dock.tab === tab);
+    for (const tab of ['pianoroll', 'instrument', 'effects', 'mixer', 'keyboard', 'chords']) $(`btn-tab-${tab}`).classList.toggle('active', dock.open && dock.tab === tab);
     $('btn-tempo-lane').classList.toggle('active', !!store.ui.showTempo);
     $('btn-panels').classList.toggle('active', dock.open);
     bpmInput.title = p.tempos.length > 1 ? 'The tempo changes during this song — typing here sets the tempo point at the playhead (or double-click a point in the Tempo lane)' : 'Tempo in beats (quarter notes) per minute';
@@ -133,7 +143,7 @@ async function boot() {
     else if (kind === 'silent') { engine.sync(); }
     else if (kind === 'ui' || kind === 'selection') {
       headers.updateSelection(); mixer.updateSelection(); timeline.updateSelection();
-      if (dock.open && (dock.tab === 'instrument' || dock.tab === 'keyboard' || dock.tab === 'effects')) renderDock();
+      if (dock.open && (dock.tab === 'instrument' || dock.tab === 'keyboard' || dock.tab === 'effects' || dock.tab === 'chords')) renderDock();
       renderTransportFields(); renderStatus(); timeline.drawStatic();
     } else if (kind === 'save') renderSave();
     if (kind === 'project' || kind === 'silent' || kind === 'load') {
@@ -187,7 +197,7 @@ async function boot() {
   $('btn-zoom-out').onclick = () => timeline.zoom(1 / 1.3);
   $('btn-panels').onclick = () => { if (dock.open) dock.close(); else dock.show(dock.tab); };
   $('btn-tempo-lane').onclick = () => { store.ui.showTempo = !store.ui.showTempo; renderAll(); };
-  for (const tab of ['pianoroll', 'instrument', 'effects', 'mixer', 'keyboard']) {
+  for (const tab of ['pianoroll', 'instrument', 'effects', 'mixer', 'keyboard', 'chords']) {
     $(`btn-tab-${tab}`).onclick = () => {
       if (tab === 'pianoroll' && !editor().clipId && store.ui.selectedClipId) { openClip(store.ui.selectedClipId); return; }
       dock.toggle(tab);
@@ -496,39 +506,111 @@ async function boot() {
   $('btn-projects').onclick = async () => {
     await store.saveNow();
     const list = h('div', { class: 'proj-list' });
+    const bar = h('div', { class: 'folder-bar' });
     let closeFn;
+    let showFolder = null; // null = all
+    const pickCover = (id, isCur) => {
+      const inp = h('input', { type: 'file', accept: 'image/*' });
+      inp.onchange = async () => {
+        const f = inp.files[0];
+        if (!f) return;
+        try {
+          const cover = await imageToCover(f);
+          if (isCur) store.mutate((p) => { p.cover = cover; });
+          else await updateProjectMeta(id, { cover });
+          await store.saveNow();
+          refresh();
+        } catch (e) { toast(e.message); }
+      };
+      inp.click();
+    };
+    const setFolder = async (it, folder) => {
+      if (it.id === store.project.id) { store.mutate((p) => { p.folder = folder; }); await store.saveNow(); } else await updateProjectMeta(it.id, { folder });
+      if (folder) setSavedFolders([...savedFolders(), folder]);
+      refresh();
+    };
+    const newFolder = async () => {
+      const v = await promptText('New folder', '', 'Folder name');
+      const name = v?.trim();
+      if (name) setSavedFolders([...savedFolders(), name]);
+      return name || null;
+    };
+    const folderMenu = (e, it, folders) => popupMenu(e.clientX, e.clientY, [
+      ...folders.map((f) => ({ label: `${f === it.folder ? '✓ ' : ''}${f}`, onClick: () => setFolder(it, f) })),
+      folders.length ? '-' : null,
+      { label: 'New folder…', onClick: async () => { const f = await newFolder(); if (f) setFolder(it, f); } },
+      { label: 'No folder', disabled: !it.folder, onClick: () => setFolder(it, '') },
+    ].filter(Boolean));
+    const songRow = (it, folders) => {
+      const isCur = it.id === store.project.id;
+      return h('div', { class: `proj ${isCur ? 'current' : ''}` },
+        h('div', {
+          class: `cover ${it.cover ? '' : 'empty'}`, title: it.cover ? 'Change the album cover' : 'Add an album cover',
+          style: it.cover ? { backgroundImage: `url(${it.cover})` } : null,
+          onclick: () => pickCover(it.id, isCur),
+        }, it.cover ? '' : '＋'),
+        h('div', { class: 'pinfo' }, h('b', {}, it.name), h('small', {}, `${it.tracks} track${it.tracks === 1 ? '' : 's'} · ${new Date(it.modified).toLocaleString()}${isCur ? ' · open now' : ''}`)),
+        isCur ? null : h('button', { class: 'btn', onclick: async () => { await openSong(it.id); closeFn(); } }, 'Open'),
+        h('button', { class: 'btn', title: 'Put this song in a folder', onclick: (e) => folderMenu(e, it, folders) }, '📁'),
+        h('button', {
+          class: 'btn danger',
+          onclick: async () => {
+            if (!(await confirmBox('Delete song?', `"${it.name}" will be permanently deleted from this computer.`, 'Delete', true))) return;
+            await deleteProject(it.id);
+            if (isCur) { closeFn(); store.load(newProject()); return; }
+            refresh();
+          },
+        }, 'Delete'));
+    };
     const refresh = async () => {
       list.innerHTML = '';
+      bar.innerHTML = '';
       const items = await listProjects();
-      if (!items.length) list.append(h('div', { class: 'hint' }, 'No saved songs yet.'));
-      for (const it of items) {
-        const isCur = it.id === store.project.id;
-        list.append(h('div', { class: `proj ${isCur ? 'current' : ''}` },
-          h('div', { class: 'pinfo' }, h('b', {}, it.name), h('small', {}, `${it.tracks} track${it.tracks === 1 ? '' : 's'} · ${new Date(it.modified).toLocaleString()}${isCur ? ' · open now' : ''}`)),
-          isCur ? null : h('button', { class: 'btn', onclick: async () => { await openSong(it.id); closeFn(); } }, 'Open'),
-          h('button', {
-            class: 'btn danger',
-            onclick: async () => {
-              if (!(await confirmBox('Delete song?', `"${it.name}" will be permanently deleted from this computer.`, 'Delete', true))) return;
-              await deleteProject(it.id);
-              if (isCur) { closeFn(); store.load(newProject()); return; }
-              refresh();
-            },
-          }, 'Delete')));
+      const folders = [...new Set([...savedFolders(), ...items.map((x) => x.folder).filter(Boolean)])].sort((a, b) => a.localeCompare(b));
+      if (showFolder && !folders.includes(showFolder)) showFolder = null;
+      const chip = (label, val, count) => h('button', { class: `fchip ${showFolder === val ? 'active' : ''}`, onclick: () => { showFolder = val; refresh(); } }, label, h('small', {}, ` ${count}`));
+      bar.append(chip('All songs', null, items.length));
+      for (const f of folders) bar.append(chip(`📁 ${f}`, f, items.filter((x) => x.folder === f).length));
+      bar.append(h('button', { class: 'fchip add', onclick: async () => { const f = await newFolder(); if (f) { showFolder = f; refresh(); } } }, '+ Folder'));
+      if (showFolder) {
+        bar.append(h('button', {
+          class: 'fchip', title: 'Delete this folder (its songs are kept, just taken out of the folder)',
+          onclick: async () => {
+            if (!(await confirmBox('Delete folder?', `The folder "${showFolder}" will be removed. Its songs stay saved.`, 'Delete folder', true))) return;
+            for (const it of items.filter((x) => x.folder === showFolder)) await setFolder(it, '');
+            setSavedFolders(savedFolders().filter((x) => x !== showFolder));
+            showFolder = null;
+            refresh();
+          },
+        }, '🗑'));
       }
+      if (!items.length) { list.append(h('div', { class: 'hint' }, 'No saved songs yet.')); return; }
+      const shown = showFolder ? items.filter((x) => x.folder === showFolder) : items;
+      if (!shown.length) list.append(h('div', { class: 'hint' }, 'This folder is empty — use 📁 on a song to move it here.'));
+      if (showFolder) { for (const it of shown) list.append(songRow(it, folders)); return; }
+      // all songs: grouped by folder, loose songs last
+      for (const f of folders) {
+        const inF = shown.filter((x) => x.folder === f);
+        if (!inF.length) continue;
+        list.append(h('div', { class: 'section-label' }, `📁 ${f}`));
+        for (const it of inF) list.append(songRow(it, folders));
+      }
+      const loose = shown.filter((x) => !x.folder || !folders.includes(x.folder));
+      if (loose.length && folders.length) list.append(h('div', { class: 'section-label' }, 'Not in a folder'));
+      for (const it of loose) list.append(songRow(it, folders));
     };
     await refresh();
     closeFn = openModal({
       title: 'Songs on this computer',
-      body: h('div', {}, list,
-        h('div', { class: 'hint', style: { marginTop: '10px' } }, 'Songs are saved automatically on this device. Use “Back up to file” to move a song to another computer, then “Open file” there.')),
+      body: h('div', {}, bar, list,
+        h('div', { class: 'hint', style: { marginTop: '10px' } }, 'Songs are saved automatically on this device. Click a cover square to add album art. Use “Back up to file” to move a song to another computer, then “Open file” there.')),
       buttons: [
         { label: 'Back up to file', left: true, onClick: () => { exportProjectFile(store.project); return false; } },
         { label: 'Open file…', onClick: () => { importSong(); } },
         { label: 'Demo song', onClick: () => { store.load(demoProject()); } },
         { label: 'New song', kind: 'primary', onClick: () => { newSong(); } },
       ],
-      width: '560px',
+      width: '640px',
     });
   };
 
@@ -574,6 +656,7 @@ async function boot() {
     noteOff: (p) => { const id = midiHeld.get(p) ?? liveTrack(); midiHeld.delete(p); if (id) engine.liveNoteOff(id, p); },
     sustain: (on) => { const id = liveTrack(); if (id) engine.liveSustain(id, on); },
     panic: () => engine.allLiveOff(),
+    bend: (v) => { const id = liveTrack(); if (id) engine.liveBend(id, v * (store.ui.bendRange || 2)); engine.emit('bend', v); },
     status: (text, devices) => {
       const el = $('midi-status');
       el.textContent = text;
@@ -605,6 +688,7 @@ async function boot() {
     if (isModalOpen() || isTyping(e)) return;
     if (dock.open && dock.tab === 'pianoroll' && editor().handleKey(e)) { e.preventDefault(); return; }
     const ctrl = e.ctrlKey || e.metaKey;
+    if (!ctrl && dock.open && dock.tab === 'chords' && chordPad.handleKey(e, true)) return;
     if (ctrl && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) store.redo(); else store.undo(); return; }
     if (ctrl && e.code === 'KeyY') { e.preventDefault(); store.redo(); return; }
     if (ctrl && e.code === 'KeyS') { e.preventDefault(); splitAtPlayhead(); return; }
@@ -638,6 +722,7 @@ async function boot() {
     }
   });
   document.addEventListener('keyup', (e) => {
+    if (chordPad.handleKey(e, false)) return;
     const n = held.get(e.code);
     if (n) { held.delete(e.code); engine.liveNoteOff(n.trackId, n.pitch); }
   });
@@ -775,6 +860,155 @@ async function boot() {
     timeline.updateSelection();
   }
 
+  timeline.onClipMenu = (e) => {
+    const clipEl = e.target.closest('.clip');
+    if (!clipEl) return;
+    e.preventDefault();
+    const f = store.findClip(clipEl.dataset.clip);
+    if (!f) return;
+    const sel = store.clipSelection();
+    if (!sel.includes(f.clip.id)) { store.ui.selectedClipId = f.clip.id; store.ui.selectedClipIds = [f.clip.id]; store.ui.selectedTrackId = f.track.id; timeline.updateSelection(); }
+    store.ui.focus = 'clip';
+    const group = store.clipSelection().map((id) => store.findClip(id)).filter(Boolean);
+    const sameTrack = group.filter((g) => g.track.id === f.track.id).map((g) => g.clip);
+    const isAudio = f.track.type === 'audio';
+    popupMenu(e.clientX, e.clientY, [
+      { label: 'Find tempo & key…', onClick: () => analyzeDialog(f.track, sameTrack) },
+      ...(isAudio ? [{ label: 'Make MIDI drum track…', hint: f.track.audioKind === 'drums' ? '' : 'for drum recordings', onClick: () => drumsToMidiDialog(f.track, sameTrack) }] : []),
+      '-',
+      { label: group.length > 1 ? `Copy ${group.length} clips` : 'Copy', hint: 'Ctrl+C', onClick: () => copySelection() },
+      { label: group.length > 1 ? `Duplicate ${group.length} clips` : 'Duplicate', hint: 'Ctrl+D', onClick: () => duplicateClip() },
+      { label: 'Split at playhead', hint: 'Ctrl+S', onClick: () => splitAtPlayhead() },
+      { label: group.length > 1 ? `Delete ${group.length} clips` : 'Delete', hint: 'Del', onClick: () => deleteClip() },
+    ]);
+  };
+
+  /** Seconds of the buffer a recorded clip plays: [from, to]. */
+  function clipAudioRange(c) {
+    const tm = new TempoMap(store.project.tempos);
+    const L = c.loop && c.loop > 0 ? Math.min(c.loop, c.length) : c.length;
+    const from = c.srcOffset || 0;
+    return [from, from + (tm.tickToSec(c.start + L) - tm.tickToSec(c.start))];
+  }
+
+  async function analyzeDialog(track, clips) {
+    engine.ensureContext();
+    clips = clips.length ? clips : track.clips;
+    const out = h('div', { class: 'analyze' }, h('div', { class: 'muted' }, 'Listening…'));
+    openModal({ title: `Tempo & key — ${track.name}`, width: '480px', body: out, buttons: [{ label: 'Close', kind: 'primary' }] });
+    await new Promise((r) => setTimeout(r, 30));
+    let tempo = null; let key = null; let what = '';
+    if (track.type === 'audio') {
+      // analyze the longest recording in the selection
+      const c = [...clips].filter((x) => x.audioId).sort((a, b) => b.length - a.length)[0];
+      if (!c) { out.innerHTML = 'There is no recording to analyze.'; return; }
+      const buf = engine.audioBuffers.get(c.audioId) || await engine.loadAudioBuffer(c.audioId);
+      if (!buf) { out.innerHTML = 'That recording could not be loaded.'; return; }
+      const [a, b] = clipAudioRange(c);
+      ({ tempo, key } = analyzeAudio(buf, a, b));
+      what = `${c.name || 'the recording'} (${(b - a).toFixed(1)} s)`;
+    } else {
+      const notes = clips.flatMap((c) => c.notes || []);
+      if (track.type !== 'drums') key = keyFromNotes(notes);
+      what = `${notes.length} note${notes.length === 1 ? '' : 's'}`;
+    }
+    out.innerHTML = '';
+    out.append(h('div', { class: 'muted' }, `Analyzed ${what}.`));
+    if (tempo) {
+      const conf = tempo.confidence > 0.35 ? 'clear beat' : tempo.confidence > 0.15 ? 'fairly sure' : 'unsure — check by ear';
+      out.append(h('div', { class: 'an-row' }, h('span', {}, 'Tempo'), h('b', {}, `${tempo.bpm} BPM`), h('small', { class: 'muted' }, `${conf} · could also be ${tempo.half} or ${tempo.double}`)),
+        h('div', { class: 'pgroup wrap' },
+          ...[tempo.bpm, tempo.half, tempo.double].map((v) => h('button', { class: 'pbtn', onclick: () => { setTempo(v); renderAll(); } }, `Set song to ${v}`))));
+    } else if (track.type === 'audio') out.append(h('div', { class: 'an-row' }, h('span', {}, 'Tempo'), h('b', {}, 'no steady beat found')));
+    else out.append(h('div', { class: 'an-row' }, h('span', {}, 'Tempo'), h('small', { class: 'muted' }, 'MIDI clips always follow the song tempo')));
+    if (key) {
+      const sure = key.score - key.runnerUp.score > 0.08 ? '' : ` · or ${keyName(key.runnerUp)}`;
+      out.append(h('div', { class: 'an-row' }, h('span', {}, 'Key'), h('b', {}, keyName(key)), h('small', { class: 'muted' }, sure)),
+        h('div', { class: 'pgroup wrap' },
+          h('button', { class: 'pbtn', onclick: () => { store.mutate((p) => { p.key = { tonic: key.tonic, mode: key.mode }; }); toast(`Song key set to ${keyName(key)} (used by the Chords tab).`); } }, `Set song key to ${keyName(key)}`),
+          key.runnerUp ? h('button', { class: 'pbtn', onclick: () => { store.mutate((p) => { p.key = { tonic: key.runnerUp.tonic, mode: key.runnerUp.mode }; }); toast(`Song key set to ${keyName(key.runnerUp)}.`); } }, `Use ${keyName(key.runnerUp)}`) : null));
+    } else if (track.type === 'drums') out.append(h('div', { class: 'an-row' }, h('span', {}, 'Key'), h('small', { class: 'muted' }, 'drums have no key')));
+    else out.append(h('div', { class: 'an-row' }, h('span', {}, 'Key'), h('b', {}, 'not enough notes')));
+  }
+
+  /** Right-click → Make MIDI: find the hits in recorded drums and build a drum-machine track from them. */
+  async function drumsToMidiDialog(track, clips) {
+    engine.ensureContext();
+    clips = clips.filter((c) => c.audioId);
+    if (!clips.length) { toast('There is no recording on that track.'); return; }
+    const bufs = new Map();
+    for (const c of clips) bufs.set(c.audioId, engine.audioBuffers.get(c.audioId) || await engine.loadAudioBuffer(c.audioId));
+    const sens = h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: 0.5 });
+    const kitSel = h('select', {}, KITS.map((k) => h('option', { value: k.id, selected: k.id === 'acoustic' }, k.name)));
+    const qSel = h('select', {}, [['off', 'Off — keep the feel'], ['16', '1/16 notes'], ['8', '1/8 notes'], ['16t', '1/16 triplets']].map(([v, l]) => h('option', { value: v, selected: v === '16' }, l)));
+    const mute = h('input', { type: 'checkbox', checked: true });
+    const info = h('div', { class: 'muted' });
+    const tm = new TempoMap(store.project.tempos);
+    let result = [];
+    const run = () => {
+      result = [];
+      const counts = { 36: 0, 38: 0, 42: 0, 46: 0 };
+      for (const c of clips) {
+        const buf = bufs.get(c.audioId);
+        if (!buf) continue;
+        const [a, b] = clipAudioRange(c);
+        const hits = detectDrumHits(buf, a, b, +sens.value);
+        const startSec = tm.tickToSec(c.start);
+        for (const hit of hits) counts[hit.pitch] = (counts[hit.pitch] || 0) + 1;
+        result.push({ clip: c, hits, startSec });
+      }
+      const total = result.reduce((n, r) => n + r.hits.length, 0);
+      info.textContent = total ? `Found ${total} hits: ${counts[36]} kick, ${counts[38]} snare, ${counts[42]} closed hat, ${counts[46]} open hat / cymbal.` : 'No hits found — try a higher sensitivity.';
+    };
+    sens.oninput = () => { clearTimeout(sens._t); sens._t = setTimeout(run, 120); };
+    run();
+    openModal({
+      title: `Make MIDI from "${track.name}"`,
+      width: '520px',
+      body: h('div', { class: 'analyze' },
+        h('div', { class: 'muted' }, 'DAWG HAUS listens for kicks, snares and hi-hats in the recording and writes them into a new drum track you can edit in the beat editor.'),
+        h('label', { class: 'row' }, h('span', {}, 'Sensitivity'), sens),
+        info,
+        h('label', { class: 'row' }, h('span', {}, 'Drum kit'), kitSel),
+        h('label', { class: 'row' }, h('span', {}, 'Snap hits to'), qSel),
+        h('label', { class: 'row' }, mute, h('span', {}, 'Mute the recording afterwards'))),
+      buttons: [
+        { label: 'Cancel' },
+        {
+          label: 'Create drum track', kind: 'primary',
+          onClick: () => {
+            const grid = { off: 0, 16: PPQ / 4, 8: PPQ / 2, '16t': PPQ / 6 }[qSel.value];
+            const t = newTrack('drums', kitSel.value);
+            for (const { clip, hits, startSec } of result) {
+              const L = clip.loop && clip.loop > 0 ? Math.min(clip.loop, clip.length) : clip.length;
+              const notes = [];
+              for (const hit of hits) {
+                let tick = tm.secToTick(startSec + hit.time) - clip.start;
+                if (grid) tick = Math.round(tick / grid) * grid;
+                if (tick < 0 || tick >= L) continue;
+                if (notes.some((n) => n.t === tick && n.p === hit.pitch)) continue;
+                notes.push({ p: hit.pitch, t: Math.round(tick), d: PPQ / 8, v: hit.vel });
+              }
+              notes.sort((x, y) => x.t - y.t);
+              const mc = newClip(clip.start, clip.length, notes);
+              if (clip.loop && clip.loop < clip.length) mc.loop = clip.loop;
+              mc.name = `${clip.name || 'Drums'} (MIDI)`;
+              t.clips.push(mc);
+            }
+            store.mutate((p) => {
+              const i = p.tracks.findIndex((x) => x.id === track.id);
+              p.tracks.splice(i + 1, 0, t);
+              if (mute.checked) p.tracks[i].mute = true;
+            });
+            store.setUI({ selectedTrackId: t.id, selectedClipId: t.clips[0]?.id || null });
+            if (t.clips[0]) openClip(t.clips[0].id);
+            toast(`Made "${store.track(t.id)?.name}" from the recording${mute.checked ? ' and muted the original' : ''}.`);
+          },
+        },
+      ],
+    });
+  }
+
   function trackMenu(e, ids) {
     const tracks = store.project.tracks.filter((t) => ids.includes(t.id));
     const n = tracks.length;
@@ -789,6 +1023,9 @@ async function boot() {
       { label: n > 1 ? `Copy ${n} tracks` : 'Copy track', hint: 'Ctrl+C', onClick: () => { store.ui.focus = 'track'; copySelection(); } },
       { label: clipboard?.kind === 'tracks' ? `Paste ${clipboard.tracks.length > 1 ? `${clipboard.tracks.length} tracks` : 'track'}` : 'Paste track', hint: 'Ctrl+V', disabled: clipboard?.kind !== 'tracks', onClick: () => paste() },
       { label: n > 1 ? `Duplicate ${n} tracks` : 'Duplicate track', onClick: () => { store.ui.focus = 'track'; copySelection(); paste(); } },
+      '-',
+      { label: 'Find tempo & key…', hint: n > 1 ? 'first selected track' : '', disabled: !tracks[0]?.clips.length, onClick: () => analyzeDialog(tracks[0], tracks[0].clips) },
+      ...(tracks[0]?.type === 'audio' ? [{ label: 'Make MIDI drum track…', hint: 'from the recorded drums', disabled: !tracks[0].clips.some((c) => c.audioId), onClick: () => drumsToMidiDialog(tracks[0], tracks[0].clips.filter((c) => c.audioId)) }] : []),
       '-',
       {
         label: n > 1 ? `Delete ${n} tracks` : 'Delete track',
@@ -842,7 +1079,7 @@ async function boot() {
     document.querySelector('.lcd').classList.toggle('counting', left > 0);
     $('pos-time').textContent = `${formatTime(tempo.tickToSec(tick))} · ${bbt.meter.num}/${bbt.meter.den}`;
     if (p.tempos.length > 1 && document.activeElement !== $('inp-bpm')) $('inp-bpm').value = tempo.bpmAt(tick).toFixed(1);
-    if (engine.playing && (store.ui.showTempo || p.tracks.some((t) => t.showAuto))) timeline.drawLanes();
+    if (engine.playing && (store.ui.showTempo || store.ui.showTuning || p.tracks.some((t) => t.showAuto))) timeline.drawLanes();
     const label = `${bbt.meter.num}/${bbt.meter.den}`;
     if (label !== lastMeterLabel) { $('btn-meter').textContent = label; lastMeterLabel = label; }
     timeline.updatePlayhead();
@@ -878,6 +1115,8 @@ function setupPWA() {
   }
   let deferred = null;
   $('btn-about').onclick = aboutDialog;
+  $('btn-tuner').onclick = () => openTuner(window.dawgHaus);
+  $('btn-tuning').onclick = tuningDialog;
   const btn = $('btn-install');
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
@@ -908,4 +1147,38 @@ async function aboutDialog() {
   openModal({ title: 'About DAWG HAUS', width: '640px',
     body: h('pre', { class: 'credits' }, credits),
     buttons: [{ label: 'Close', kind: 'primary' }] });
+}
+
+// ---------- song tuning ----------
+function tuningDialog() {
+  const store = window.dawgHaus.store;
+  const renderAll = window.dawgHaus.renderAll;
+  const cur = store.project.tuning?.a4 || 440;
+  const inp = h('input', { type: 'number', min: 415, max: 466, step: 0.1, value: cur, style: { width: '90px' } });
+  const cents = h('span', { class: 'muted' });
+  const showCents = () => { const v = +inp.value; cents.textContent = Number.isFinite(v) && v > 0 ? `${(1200 * Math.log2(v / 440)).toFixed(1)} cents from standard` : ''; };
+  inp.oninput = showCents; showCents();
+  const preset = (v, label) => h('button', { class: 'pbtn', onclick: () => { inp.value = v; showCents(); } }, label);
+  const lane = h('input', { type: 'checkbox', checked: !!store.ui.showTuning });
+  openModal({
+    title: 'Song tuning',
+    width: '520px',
+    body: h('div', {},
+      h('p', { class: 'muted' }, 'Moves the pitch of every instrument, sampler and synth in the song by a few Hz (recorded audio isn’t changed).'),
+      h('label', { class: 'row' }, h('span', {}, 'A4 ='), inp, h('span', {}, 'Hz'), cents),
+      h('div', { class: 'pgroup wrap', style: { margin: '10px 0' } }, preset(432, '432'), preset(436, '436'), preset(440, '440 standard'), preset(442, '442'), preset(444, '444')),
+      h('label', { class: 'row' }, lane, h('span', {}, 'Show the Tuning lane, to change the tuning during the song (automation)'))),
+    buttons: [
+      { label: 'Cancel' },
+      {
+        label: 'Apply', kind: 'primary',
+        onClick: () => {
+          const v = Math.min(466, Math.max(415, +inp.value || 440));
+          store.mutate((p) => { p.tuning = { ...(p.tuning || {}), a4: Math.round(v * 10) / 10, points: p.tuning?.points || [] }; });
+          store.ui.showTuning = lane.checked;
+          renderAll();
+        },
+      },
+    ],
+  });
 }

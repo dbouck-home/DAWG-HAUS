@@ -2,7 +2,7 @@
 // Click empty space to add a point, drag points to move them, double-click a point to type its value
 // (e.g. an exact BPM), right-click a point for a menu (type value / delete).
 // Hold Alt while dragging to ignore the snap grid.
-import { targetInfo, valueAt, toNorm, fromNorm, formatValue, TEMPO_TARGET } from '../automation.js';
+import { targetInfo, valueAt, toNorm, fromNorm, formatValue, TEMPO_TARGET, TUNING_TARGET } from '../automation.js';
 import { fxParamDef } from '../audio/effects.js';
 import { colorForTrack } from '../audio/presets.js';
 import { promptText, popupMenu, toast } from './dom.js';
@@ -18,6 +18,14 @@ export function laneData(project, trackId, laneId) {
       staticValue: project.tempos[0]?.bpm ?? 120,
       color: '#b5d6ec',
       isTempo: true,
+    };
+  }
+  if (laneId === 'tuning') {
+    return {
+      info: TUNING_TARGET,
+      points: project.tuning?.points || [],
+      staticValue: project.tuning?.a4 || 440,
+      color: '#c9a7ff',
     };
   }
   const t = project.tracks.find((x) => x.id === trackId);
@@ -42,6 +50,10 @@ export function setLanePoints(project, trackId, laneId, points) {
   if (laneId === 'tempo') {
     if (!sorted.length) sorted.push({ t: 0, v: project.tempos[0]?.bpm ?? 120 });
     project.tempos = sorted.map((p) => ({ tick: Math.round(p.t), bpm: Math.round(p.v * 10) / 10 }));
+    return;
+  }
+  if (laneId === 'tuning') {
+    project.tuning = { a4: project.tuning?.a4 || 440, ...(project.tuning || {}), points: sorted.map((p) => ({ t: Math.round(p.t), v: Math.round(p.v * 10) / 10 })) };
     return;
   }
   const t = project.tracks.find((x) => x.id === trackId);
@@ -152,7 +164,7 @@ export function bindLaneRow(row, { store, timeline }) {
     const cur = data.points[i].v;
     const shown = pct(info) ? Math.round(cur * 100) : Math.round(cur * 100) / 100;
     const unit = info.unit || (pct(info) ? (info.key === 'pan' ? 'L −100 … R 100' : '%') : '');
-    const txt = await promptText(info.key === 'tempo' ? 'Tempo at this point' : `${info.label} at this point`, String(shown), unit || 'Value');
+    const txt = await promptText(info.key === 'tempo' ? 'Tempo at this point' : info.key === 'tuning' ? 'Tuning at this point (A4 in Hz)' : `${info.label} at this point`, String(shown), unit || 'Value');
     if (txt == null) return;
     let v = parseFloat(String(txt).replace(',', '.'));
     if (!Number.isFinite(v)) { toast('Please type a number.'); return; }

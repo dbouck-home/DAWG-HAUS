@@ -44,6 +44,7 @@ export class MidiInput {
     if (type === 0x90 && d2 > 0) this.h.noteOn(d1, d2);
     else if (type === 0x80 || (type === 0x90 && d2 === 0)) this.h.noteOff(d1);
     else if (type === 0xb0 && d1 === 64) this.h.sustain(d2 >= 64);
+    else if (type === 0xe0) this.h.bend?.((((d2 << 7) | d1) - 8192) / 8192); // −1 … +1
     else if (type === 0xb0 && (d1 === 123 || d1 === 120)) this.h.panic?.();
   }
 }

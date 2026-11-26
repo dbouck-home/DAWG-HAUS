@@ -87,6 +87,13 @@ export class TrackHeaders {
           h('button', { class: 'sb', title: 'Remove tempo changes (keep the starting tempo)', onclick: () => this.store.mutate((p) => { p.tempos = [{ tick: 0, bpm: p.tempos[0].bpm }]; }) }, '⌫')),
         h('span', { class: 'alabel' }, n > 1 ? `${n} tempo points — the song speeds up / slows down` : 'click the lane to add tempo changes')));
     }
+    if (ui.showTuning) {
+      const n = project.tuning?.points?.length || 0;
+      this.el.append(h('div', { class: 'ah tempo' },
+        h('div', { class: 'row' }, h('b', {}, '𝄞 Tuning'), h('div', { class: 'spacer' }),
+          h('button', { class: 'sb', title: 'Remove tuning changes (keep A4 = the song tuning)', onclick: () => this.store.mutate((p) => { p.tuning = { ...(p.tuning || {}), points: [] }; }) }, '⌫')),
+        h('span', { class: 'alabel' }, n ? `${n} tuning points (A4 in Hz)` : `A4 = ${(project.tuning?.a4 || 440)} Hz — click the lane to bend the whole song's pitch`)));
+    }
     project.tracks.forEach((t) => {
       const selected = t.id === ui.selectedTrackId;
       const nameEl = h('div', {

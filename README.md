@@ -33,6 +33,13 @@ Installed copies pick up the update the next time they're opened.
 - Audio track types: Vocals, Guitar, Bass, Drum Recording, Audio (other); change it in the Instrument tab
 - Sampler shows the recording's pitch (note, cents and Hz); Detect pitch also fine-tunes in cents
 - New songs start empty (no automatic Grand Piano track)
+- Pitch-bend wheel beside the on-screen keyboard (±1, 2, 7 or 12 semitones; springs back); MIDI keyboards' pitch wheels work too
+- Song tuning: the A4 button sets the pitch of every instrument (e.g. 432 or 442 Hz); tick "Show the Tuning lane" to automate it
+- 𝄞 Tuner: a chromatic tuner on the audio input (uses the selected audio track's input/channel)
+- Songs: folders (📁 on a song, + Folder, filter chips) and album covers (click the square next to a song)
+- Chords tab: omnichord-style chord buttons in the song's key (keys 1–7, Shift = 7th), all major/minor/7th chords, Hold/Latch/Strum modes, and a strum plate to sweep with the mouse
+- Right-click a clip or a track → Find tempo & key: detects BPM (recordings) and key (recordings and MIDI), with buttons to apply them to the song
+- Dialogs inside dialogs: Enter/Escape now only affect the top one
 
 ## Earlier updates
 

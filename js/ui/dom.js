@@ -19,6 +19,7 @@ export function h(tag, attrs = {}, ...children) {
 }
 
 let modalOpen = 0;
+const modalStack = []; // only the top dialog answers Enter / Escape
 export function isModalOpen() { return modalOpen > 0; }
 
 /**
@@ -35,11 +36,14 @@ export function openModal({ title, body, buttons = [], onClose, width }) {
     if (closed) return;
     closed = true;
     modalOpen--;
+    const si = modalStack.indexOf(onKey);
+    if (si >= 0) modalStack.splice(si, 1);
     back.remove();
     document.removeEventListener('keydown', onKey, true);
     onClose?.();
   };
   const onKey = (e) => {
+    if (modalStack[modalStack.length - 1] !== onKey) return;
     if (e.key === 'Escape') { e.stopPropagation(); close(); }
     if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
       const primary = buttons.find((b) => b.kind === 'primary');
@@ -55,6 +59,7 @@ export function openModal({ title, body, buttons = [], onClose, width }) {
   }
   back.addEventListener('pointerdown', (e) => { if (e.target === back) close(); });
   document.addEventListener('keydown', onKey, true);
+  modalStack.push(onKey);
   root.append(back);
   modalOpen++;
   const first = modal.querySelector('input, select');

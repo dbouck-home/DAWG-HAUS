@@ -17,6 +17,7 @@ export const AUTO_KEYS = {
 };
 
 export const TEMPO_TARGET = { key: 'tempo', label: 'Tempo', min: 30, max: 240, unit: 'BPM', def: 120 };
+export const TUNING_TARGET = { key: 'tuning', label: 'Tuning (A4)', min: 415, max: 466, unit: 'Hz', def: 440 };
 
 /** Every automatable target of a track: [{ key, label, min, max, unit, log, def }] */
 export function targetsFor(track) {
@@ -65,6 +66,7 @@ export function activeLane(track, key) {
 export function formatValue(info, v) {
   if (!info) return String(v);
   if (info.key === 'pan') return Math.abs(v) < 0.01 ? 'C' : v < 0 ? `L${Math.round(-v * 100)}` : `R${Math.round(v * 100)}`;
+  if (info.key === 'tuning') return `A4 = ${v.toFixed(1)} Hz`;
   if (info.unit === 'Hz') return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)} Hz`;
   if (info.unit === 'dB') return `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`;
   if (info.unit === 'BPM') return `${v.toFixed(1)} BPM`;

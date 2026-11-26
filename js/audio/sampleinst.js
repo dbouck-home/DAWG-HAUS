@@ -1,3 +1,4 @@
+import { detuneNow, trackDetune, applyBend } from './bend.js';
 // Sampler instrument: plays a recorded or imported sound across the keyboard.
 // Settings live in track.sampler:
 // { audioId, name, start, end (seconds), root (MIDI note), mode: 'pitched' | 'oneshot',
@@ -41,6 +42,8 @@ export class SampleInstrument {
   setTrack(track) { this.s = { ...SAMPLER_DEFAULTS, ...(track.sampler || {}) }; }
   setPreset() {}
 
+  setBend(cents, time) { if (this.s.mode === 'pitched') applyBend(this, cents, time); }
+
   noteOn(pitch, velocity = 100, time = this.ctx.currentTime) {
     const s = this.s;
     if (!s.audioId) return null;
@@ -64,6 +67,7 @@ export class SampleInstrument {
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = rate;
+    if (s.mode === 'pitched') src.detune.value = detuneNow(this);
     if (s.loop) {
       src.loop = true;
       src.loopStart = start;
@@ -77,6 +81,7 @@ export class SampleInstrument {
     src.connect(amp).connect(this.output);
     src.start(t, start);
     const voice = { pitch, start: t, src, amp, releasedAt: null };
+    if (s.mode === 'pitched') trackDetune(this, voice, [{ param: src.detune, base: 0 }]);
     if (!s.loop) {
       // play to the end marker, with a short fade so it doesn't click
       const len = (end - start) / rate;

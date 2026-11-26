@@ -54,8 +54,43 @@ export async function deleteProject(id) {
 export async function listProjects() {
   const all = await tx('readonly', (s) => reqP(s.getAll()));
   return (all || [])
-    .map((p) => ({ id: p.id, name: p.name, modified: p.modified, tracks: p.tracks?.length || 0 }))
+    .map((p) => ({ id: p.id, name: p.name, modified: p.modified, tracks: p.tracks?.length || 0, folder: p.folder || '', cover: p.cover || null }))
     .sort((a, b) => b.modified - a.modified);
+}
+
+/** Change a saved song's folder / cover without opening it. */
+export async function updateProjectMeta(id, patch) {
+  const p = await loadProject(id);
+  if (!p) return;
+  Object.assign(p, patch);
+  await tx('readwrite', (s) => reqP(s.put(p)));
+}
+
+/** Folder names, including empty folders the user made. */
+export function savedFolders() {
+  try { return JSON.parse(localStorage.getItem('dawg:folders') || '[]'); } catch { return []; }
+}
+export function setSavedFolders(list) {
+  try { localStorage.setItem('dawg:folders', JSON.stringify([...new Set(list)].sort((a, b) => a.localeCompare(b)))); } catch { /* ignore */ }
+}
+
+/** Shrink a picture file to a square JPEG data URL (album cover). */
+export function imageToCover(file, size = 300) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const g = c.getContext('2d');
+      const s = Math.min(img.width, img.height);
+      g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That file isn\u2019t a picture this browser can open.')); };
+    img.src = url;
+  });
 }
 
 export function lastProjectId() {

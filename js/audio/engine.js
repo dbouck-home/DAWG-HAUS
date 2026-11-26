@@ -112,9 +112,18 @@ export const CLICK_SOUNDS = [
   ['beep', 'Beep'], ['wood', 'Woodblock'], ['rim', 'Sticks'], ['cowbell', 'Cowbell'], ['hat', 'Hi-hat'], ['kick', 'Kick + hat'], ['soft', 'Soft'],
 ];
 
+/** Song tuning: A4 in Hz at a tick (automatable in the Tuning lane), as cents away from 440 Hz. */
+export function tuningHzAt(p, tick) {
+  const pts = p.tuning?.points;
+  if (pts && pts.length) return valueAt(pts, tick);
+  return p.tuning?.a4 || 440;
+}
+export const hzToCents = (hz) => 1200 * Math.log2(hz / 440);
+
 export class Engine {
   constructor(getProject) {
     this.getProject = getProject;
+    this.tuning = { cents: 0 }; // read by instruments when a note starts
     this.ctx = null;
     this.channels = new Map();
     this.playing = false;
@@ -205,6 +214,7 @@ export class Engine {
         if (!(ch.instrument instanceof SampleInstrument)) {
           ch.instrument?.dispose();
           ch.instrument = new SampleInstrument(this.ctx, t, ch.input, (id) => this.audioBuffers.get(id) || (this.loadAudioBuffer(id), null));
+          ch.instrument.tuning = this.tuning;
           ch.presetId = null;
           ch.paramKey = key;
         } else if (key !== ch.paramKey) { ch.instrument.setTrack(t); ch.paramKey = key; }
@@ -217,6 +227,7 @@ export class Engine {
         if (ch.presetId !== pid) {
           ch.instrument?.dispose();
           ch.instrument = pr.kind === 'sample' ? new Sampler(this.ctx, pr, ch.input) : new Synth(this.ctx, pr, ch.input);
+          ch.instrument.tuning = this.tuning;
           ch.presetId = pid;
           ch.paramKey = JSON.stringify(t.instrument.params || {});
           if (!ch.instrument.ready) {
@@ -441,6 +452,7 @@ export class Engine {
             }
             if (on < from || on >= to || on >= repEnd) continue;
             const off = Math.min(on + n.d, repEnd, cutTick);
+            this.tuning.cents = hzToCents(tuningHzAt(p, on));
             ch.instrument.noteOn(n.p, n.v, time(on));
             ch.instrument.noteOff(n.p, time(Math.max(on + 1, off)));
           }
@@ -828,9 +840,17 @@ export class Engine {
 
   // ---------- live input ----------
 
+  /** Live pitch bend for a track's instrument, in semitones (−2 … +2 by default). */
+  liveBend(trackId, semis) {
+    this.ensureContext();
+    this.channels.get(trackId)?.instrument?.setBend?.(semis * 100, this.ctx.currentTime);
+  }
+
   liveNoteOn(trackId, pitch, vel) {
     this.ensureContext();
     const ch = this.channels.get(trackId);
+    const p = this.getProject();
+    if (p) this.tuning.cents = hzToCents(tuningHzAt(p, this.playing ? this.currentTick() : this.positionTick));
     ch?.instrument?.noteOn(pitch, vel, this.ctx.currentTime);
     this.emit('live', pitch, true, trackId);
     if (this.recording && this.playing && trackId === this.recordTrackId) {

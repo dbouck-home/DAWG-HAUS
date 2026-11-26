@@ -86,6 +86,7 @@ export class Timeline {
       return row;
     };
     if (ui.showTempo) this.rows.append(autoRow('', 'tempo'));
+    if (ui.showTuning) this.rows.append(autoRow('', 'tuning'));
     for (const t of project.tracks) {
       const lane = h('div', { class: `lane ${t.id === ui.selectedTrackId ? 'selected' : ''}`, 'data-track': t.id });
       const color = colorForTrack(t);
@@ -184,7 +185,7 @@ export class Timeline {
     this.contentWidth = width;
     this.inner.style.gridTemplateColumns = `${this.headerW}px ${width}px`;
     const { project, ui } = this.store;
-    let contentH = project.tracks.length * this.laneH + (ui.showTempo ? AUTO_H : 0);
+    let contentH = project.tracks.length * this.laneH + (ui.showTempo ? AUTO_H : 0) + (ui.showTuning ? AUTO_H : 0);
     for (const t of project.tracks) if (t.showAuto) contentH += (t.automation || []).length * AUTO_H;
     const lanesH = Math.max(contentH, this.arrange.clientHeight - RULER_H);
     this.lanes.style.height = `${lanesH}px`;

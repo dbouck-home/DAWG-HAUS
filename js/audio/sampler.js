@@ -1,3 +1,4 @@
+import { detuneNow, trackDetune, applyBend } from './bend.js';
 // Sample-based instrument: plays the nearest recorded note, re-pitched to the requested note.
 // Samples load on demand and are shared between tracks using the same instrument.
 
@@ -53,6 +54,8 @@ export class Sampler {
 
   setPreset(pr) { this.preset = pr; }
 
+  setBend(cents, time) { applyBend(this, cents, time); }
+
   pick(pitch) {
     // sample notes are shifted by the preset's transpose (e.g. bass clarinet = clarinet an octave down)
     const tr = this.preset.transpose || 0;
@@ -78,6 +81,7 @@ export class Sampler {
     const src = ctx.createBufferSource();
     src.buffer = this.buffers.get(key);
     src.playbackRate.value = Math.pow(2, semis / 12);
+    src.detune.value = detuneNow(this);
 
     const vel = Math.max(0.03, velocity / 127);
     const sens = pr.velSens ?? 0.8;
@@ -96,6 +100,7 @@ export class Sampler {
     src.connect(filter).connect(amp).connect(this.output);
     src.start(t);
     const voice = { pitch, start: t, src, amp, releasedAt: null };
+    trackDetune(this, voice, [{ param: src.detune, base: 0 }]);
     src.onended = () => this.cleanup(voice);
     this.voices.push(voice);
     return voice;

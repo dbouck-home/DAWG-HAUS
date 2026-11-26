@@ -14,6 +14,7 @@
 <body>
   <header id="topbar">
     <button id="logo" class="brand" title="Woof."><img class="logo-house" src="icons/icon.svg" alt=""><span class="logo-text">DAWG <b>HAUS</b></span></button>
+    <div id="project-cover" hidden title="Album cover (change it in Songs)"></div>
     <button id="project-name" class="project-name" title="Rename song">Untitled Song</button>
     <span id="save-status" class="save-status">Saved</span>
     <div class="spacer"></div>
@@ -22,6 +23,7 @@
     <button id="btn-projects" class="tb" title="Open, create, import or back up songs">Songs</button>
     <button id="btn-export" class="tb" title="Export the song as a WAV or MP3 file">⤓ Export</button>
     <button id="btn-install" class="tb accent" hidden>Install app</button>
+    <button id="btn-tuner" class="tb" title="Chromatic tuner — tune your guitar, bass or voice through the audio input">𝄞 Tuner</button>
     <button id="btn-about" class="tb" title="About DAWG HAUS and sound credits">ⓘ</button>
     <span id="midi-status" class="midi-status" title="Connected MIDI devices">MIDI: …</span>
   </header>
@@ -50,6 +52,7 @@
       </label>
       <button id="btn-tap" class="tbtn small-text" title="Tap tempo: click this in time with the music (4 or more taps)">Tap</button>
       <button id="btn-tempo-lane" class="tbtn toggle small-text" title="Show the tempo lane — add points to speed up or slow down the whole song">Tempo lane</button>
+      <button id="btn-tuning" class="tbtn small-text" title="Song tuning: the pitch of A4 for every instrument (440 Hz is standard)">A 440</button>
       <button id="btn-meter" class="meter-btn" title="Time signature at the playhead's bar">4/4</button>
       <label class="field">
         <span>Snap</span>
@@ -72,6 +75,7 @@
       <button id="btn-tab-effects" class="tbtn toggle" title="Effects for the selected track or the master">Effects</button>
       <button id="btn-tab-mixer" class="tbtn toggle" title="Mixer">Mixer</button>
       <button id="btn-tab-keyboard" class="tbtn toggle" title="On-screen keyboard">Keyboard</button>
+      <button id="btn-tab-chords" class="tbtn toggle" title="Chord pad (omnichord style) in the song's key">Chords</button>
       </span>
     </div>
   </div>
@@ -100,6 +104,7 @@
     <div class="dock-pane" data-pane="effects" id="fx-root"></div>
     <div class="dock-pane" data-pane="mixer"><div id="mixer-strips"></div></div>
     <div class="dock-pane" data-pane="keyboard" id="kb-root"></div>
+    <div class="dock-pane" data-pane="chords" id="chord-root"></div>
   </section>
 
   <footer id="statusbar">

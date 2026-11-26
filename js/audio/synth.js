@@ -1,3 +1,4 @@
+import { detuneNow, trackDetune, applyBend } from './bend.js';
 // Subtractive synthesizer used by the Phase 1 instrument presets.
 // Polyphonic, or monophonic with glide for mono presets.
 
@@ -21,6 +22,8 @@ export class Synth {
   get ready() { return true; }
 
   setPreset(pr) { this.preset = pr; }
+
+  setBend(cents, time) { applyBend(this, cents, time); }
 
   noteOn(pitch, velocity = 100, time = this.ctx.currentTime) {
     const ctx = this.ctx;
@@ -69,7 +72,7 @@ export class Synth {
       } else {
         osc.frequency.setValueAtTime(freq * mult, t);
       }
-      osc.detune.value = o.detune || 0;
+      osc.detune.value = (o.detune || 0) + detuneNow(this);
       const g = ctx.createGain();
       g.gain.value = o.gain;
       osc.connect(g).connect(filter);
@@ -79,6 +82,7 @@ export class Synth {
 
     this.lastFreq = freq;
     const voice = { pitch, start: t, amp, filter, oscs, releasedAt: null };
+    trackDetune(this, voice, oscs.map((osc, i) => ({ param: osc.detune, base: pr.osc[i].detune || 0 })));
     oscs[0].onended = () => this.cleanup(voice);
     this.voices.push(voice);
     return voice;
